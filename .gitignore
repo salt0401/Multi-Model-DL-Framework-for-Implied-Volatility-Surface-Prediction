@@ -8,3 +8,4 @@ nul
 LossPlot/
 logs/
 dataset/
+.pytest_cache/

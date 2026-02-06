@@ -32,6 +32,18 @@ src/
   train_hyperiv.py        # HyperIV training with per-surface batching
   diffusion.py            # DDPM (UNet1D, noise schedule, sampler)
   train_diffusion.py      # DDPM training for IV surface forecasting
+tests/
+  conftest.py             # Shared fixtures (float64, synthetic data, mock config)
+  test_utils.py           # Utility functions and helper classes (22 tests)
+  test_model.py           # All model forward passes and loss classes (52 tests)
+  test_model_regression.py # Regression tests for 17 fixed bugs (18 tests)
+  test_train_integration.py # End-to-end training loop integration (10 tests)
+  test_hyperiv.py         # HyperIV model components (15 tests)
+  test_diffusion.py       # DDPM components and noise schedule (19 tests)
+  test_dgm.py             # DGM network, PDE loss, sampler (17 tests)
+  test_adjustment.py      # GRU+Attention adjustment model (21 tests)
+  test_structural_break.py # Break detection classes (16 tests)
+  test_dataset.py         # DataProcessor with mock data (14 tests)
 dataset/                  # Data files (not tracked)
 ```
 
@@ -47,6 +59,9 @@ pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
 
 # Install dependencies
 pip install numpy pandas matplotlib tqdm scipy scikit-learn statsmodels ruptures
+
+# Install test dependencies
+pip install pytest
 ```
 
 ## Usage
@@ -79,6 +94,43 @@ Requires TXO options data in `dataset/` folder:
 - `2009_2023.pkl` or `2009_2023.csv` — Raw TXO options data
 - `TWII.csv` — TAIEX underlying index prices
 - `VIX.csv` — VIX data (for adjustment and diffusion models)
+
+## Testing
+
+215 unit tests covering all 5 model families, loss functions, data pipelines, and training loops. Tests use tiny model architectures and synthetic data for speed (~4 seconds total).
+
+```bash
+# Run all tests
+python -m pytest tests/ -v
+
+# Run specific test module
+python -m pytest tests/test_model.py -v
+
+# Run regression tests only
+python -m pytest tests/test_model_regression.py -v
+```
+
+### Test Categories
+
+| Category | Tests | What's Covered |
+|----------|-------|----------------|
+| Model correctness | 52 | Forward pass shapes, dtypes, gradient flow for all model classes |
+| Bug regressions | 18 | Named after bug IDs (M1-M5, X1-X3, T1-T2, E1) to prevent regressions |
+| Training integration | 10 | `train_one_epoch`, `validate`, scheduler placement, early stopping |
+| HyperIV | 15 | Set encoder, target network, hypernetwork param generation, loss |
+| Diffusion (DDPM) | 19 | UNet1D, cosine noise schedule, trainer, sampler |
+| DGM | 17 | S-layers, PDE residual, boundary/terminal conditions, BS pricing |
+| Adjustment | 21 | SquarePlus, temporal attention, GRU model (3 modes), KDE loss |
+| Structural break | 16 | CUSUM, Bai-Perron, VIX detectors, dispatcher |
+| Dataset | 14 | Train/val/test splits, chronological ordering, mock I/O |
+| Utilities | 22 | Seed, config parsing, metrics, early stopping, RMSE/MAPE |
+
+### Key Design Decisions
+
+- **Session-wide `float64`**: `conftest.py` sets `torch.set_default_dtype(torch.float64)` to match production
+- **Tiny models**: `hidden_sizes=[5,5,5]`, `ensemble_num=2` for sub-second execution
+- **No file I/O**: Dataset tests inject mock DataFrames directly into `DataProcessor`
+- **Autograd-safe**: SmileModel tests never wrap forward passes in `torch.no_grad()` — the model uses `autograd.grad(create_graph=True)` internally
 
 ## Configuration
 

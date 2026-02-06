@@ -85,8 +85,10 @@ class SmileModel(nn.Module):
         self.smile_function = lambda logm: torch.sqrt(logm*torch.tanh(logm+0.5) + torch.tanh(-logm/2)+0.0005)
 
     def forward(self, ttm, logm):
-        ttm.requires_grad = True
-        logm.requires_grad = True
+        # Detach + clone so that autograd.grad() does not leak into the
+        # caller's graph (fixes multi-batch and multi-call backward issues).
+        ttm = ttm.detach().requires_grad_(True)
+        logm = logm.detach().requires_grad_(True)
         batch_size = ttm.shape[0]
 
         term_logm = self.smile_function(torch.tile(self.bias_logm, (batch_size, 1)) + logm @ torch.exp(self.weights_logm))
@@ -104,7 +106,7 @@ class SmileModel(nn.Module):
         grad_ttm1 = grad1[0].clone()
         grad_logm1 = grad1[1].clone()
         total_grad_logm1 = torch.sum(grad_logm1)
-        grad_logm2 = torch.autograd.grad(total_grad_logm1, logm)[0]
+        grad_logm2 = torch.autograd.grad(total_grad_logm1, logm, create_graph=True)[0]
         return output, grad_ttm1, grad_logm1, grad_logm2
 
 

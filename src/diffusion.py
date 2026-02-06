@@ -30,7 +30,7 @@ class SinusoidalTimeEmbedding(nn.Module):
         freqs = torch.exp(
             -math.log(10000) * torch.arange(half, dtype=t.dtype, device=t.device) / half
         )
-        args = t.unsqueeze(-1).float() * freqs.unsqueeze(0)
+        args = t.unsqueeze(-1) * freqs.unsqueeze(0)
         return torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
 
 
@@ -273,7 +273,7 @@ class DiffusionTrainer:
         x_noisy = sqrt_ab * x_target + sqrt_omab * noise
 
         # Predict noise
-        noise_pred = self.model(x_noisy, t.float(), current_surface, market_features)
+        noise_pred = self.model(x_noisy, t.to(x_target.dtype), current_surface, market_features)
 
         # MSE loss on noise prediction
         loss = F.mse_loss(noise_pred, noise)
