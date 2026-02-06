@@ -84,7 +84,7 @@ def main():
     if not os.path.exists(model_path):
         logger.error(f'Base model not found at {model_path}. Train it first.')
         return
-    base_model.load_state_dict(torch.load(model_path, map_location=device))
+    base_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     base_model.eval()
 
     # Step 2: Load data and compute features
@@ -202,7 +202,7 @@ def main():
 
     # Step 8: Final evaluation
     logger.info('Evaluating adjustment model...')
-    adj_model.load_state_dict(torch.load(adj_model_path, map_location=device))
+    adj_model.load_state_dict(torch.load(adj_model_path, map_location=device, weights_only=True))
     adj_model.eval()
 
     all_preds = []

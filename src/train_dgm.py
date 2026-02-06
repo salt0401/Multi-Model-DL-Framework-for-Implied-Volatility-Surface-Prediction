@@ -160,7 +160,7 @@ def main():
             hidden_dim=dgm_cfg.getint('hidden_dim'),
             n_layers=dgm_cfg.getint('n_layers')
         ).double().to(device)
-        pretrained_model.load_state_dict(torch.load(args.transfer_from, map_location=device))
+        pretrained_model.load_state_dict(torch.load(args.transfer_from, map_location=device, weights_only=True))
 
     model = train_dgm(config, device, logger, pretrained_model)
     logger.info('DGM training complete.')

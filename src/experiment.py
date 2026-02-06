@@ -139,7 +139,7 @@ def main():
     hidden_sizes = [int(x) for x in parse_list_config(config['model_sett']['hidden_sizes'], int)]
     ensemble_num = config['model_sett'].getint('ensemble_num')
     model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num).to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
 
     print('Running inference...')
     tv_pred, tv_true, taus, logms = run_base_model_inference(model, test_loader, device)

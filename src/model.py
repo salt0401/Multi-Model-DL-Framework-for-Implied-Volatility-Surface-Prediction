@@ -71,6 +71,7 @@ class SmileModel(nn.Module):
         self.weights_exp = nn.Parameter(nn.init.normal_(torch.empty(self.J, hidden_sizes[0], dtype=torch.float64), mean=0, std=0.01))
         self.bias_exp = nn.Parameter(nn.init.normal_(torch.empty(1, hidden_sizes[0], dtype=torch.float64), mean=0, std=0.01))
 
+        self.layer_norm = nn.LayerNorm(hidden_sizes[0], elementwise_affine=True)
         self.hidden_layers = nn.ModuleList([nn.Linear(hidden_sizes[i], hidden_sizes[i+1]) for i in range(len(hidden_sizes)-1)])
         self.output_layers = nn.Linear(hidden_sizes[-1], 1)
 
@@ -91,6 +92,7 @@ class SmileModel(nn.Module):
         term_logm = self.smile_function(torch.tile(self.bias_logm, (batch_size, 1)) + logm @ torch.exp(self.weights_logm))
         term_ttm = self.sigmoid(torch.tile(self.bias_ttm, (batch_size, 1)) + ttm @ torch.exp(self.weights_ttm))
         out_hidden = (term_logm * term_ttm) @ torch.exp(self.weights_exp) + torch.tile(self.bias_exp, (batch_size, 1))
+        out_hidden = self.layer_norm(out_hidden)
 
         for hidden_layer in self.hidden_layers:
             out_hidden = self.activation(hidden_layer(out_hidden))

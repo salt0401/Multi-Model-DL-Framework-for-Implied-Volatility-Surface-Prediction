@@ -59,38 +59,43 @@ def train_one_epoch(model, train_loader, c6_loader, loss_function, optimizer, de
 
 
 def validate(model, val_loader, c6_loader, loss_function, device):
-    """Validate model. Returns average loss."""
+    """Validate model. Returns average loss.
+
+    Note: SmileModel.forward() uses torch.autograd.grad(create_graph=True),
+    so we cannot wrap the forward pass in torch.no_grad(). Instead we run
+    the forward pass with gradients enabled, then detach the loss.
+    """
     model.eval()
     total_loss = 0.0
     n_batches = 0
 
     c6_iterator = iter(c6_loader)
 
-    with torch.no_grad():
-        for tau_val, logm_val, y_val, yATM_val in val_loader:
-            try:
-                tau_syn, logm_syn, yATM_syn = next(c6_iterator)
-            except StopIteration:
-                c6_iterator = iter(c6_loader)
-                tau_syn, logm_syn, yATM_syn = next(c6_iterator)
+    for tau_val, logm_val, y_val, yATM_val in val_loader:
+        try:
+            tau_syn, logm_syn, yATM_syn = next(c6_iterator)
+        except StopIteration:
+            c6_iterator = iter(c6_loader)
+            tau_syn, logm_syn, yATM_syn = next(c6_iterator)
 
-            tau_val = tau_val.to(device)
-            logm_val = logm_val.to(device)
-            y_val = y_val.to(device)
-            yATM_val = yATM_val.to(device)
-            tau_syn = tau_syn.to(device)
-            logm_syn = logm_syn.to(device)
-            yATM_syn = yATM_syn.to(device)
+        tau_val = tau_val.to(device)
+        logm_val = logm_val.to(device)
+        y_val = y_val.to(device)
+        yATM_val = yATM_val.to(device)
+        tau_syn = tau_syn.to(device)
+        logm_syn = logm_syn.to(device)
+        yATM_syn = yATM_syn.to(device)
 
-            output_val, grad_ttm1_val, grad_logm1_val, grad_logm2_val = model(tau_val, logm_val, yATM_val)
-            output_syn, _, _, grad_logm2_syn = model(tau_syn, logm_syn, yATM_syn)
+        # Forward pass needs autograd for SmileModel gradient computation
+        output_val, grad_ttm1_val, grad_logm1_val, grad_logm2_val = model(tau_val, logm_val, yATM_val)
+        output_syn, _, _, grad_logm2_syn = model(tau_syn, logm_syn, yATM_syn)
 
+        with torch.no_grad():
             loss = loss_function(
                 output_val, y_val, logm_val,
                 grad_ttm1_val, grad_logm1_val, grad_logm2_val,
                 output_syn, logm_syn, grad_logm2_syn
             )
-
             total_loss += loss.item()
             n_batches += 1
 

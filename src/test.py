@@ -106,7 +106,7 @@ def main():
         print(f'Model file not found at {model_path}. Train the model first.')
         return
 
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
     # Inference

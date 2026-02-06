@@ -228,11 +228,21 @@ class DataProcessor():
 
         return syn_c6
 
-    def getYATM(self):
+    def getYATM(self, train_end_date=None):
+        """Compute ATM total variance interpolation.
+
+        If train_end_date is provided, fit the interpolant only on training data
+        (dates <= train_end_date) to avoid data leakage from test data.
+        """
         print('concating total variance when atm')
         # Bug D4 fixed: use 'underlying' not 'S'
-        atm_idxs = self.prs_dataset.groupby(['tau']).apply(lambda x: (x['underlying'] - x['strike_price']).abs().idxmin())
-        atm_rows = self.prs_dataset.loc[atm_idxs]
+        if train_end_date is not None:
+            fit_data = self.prs_dataset[self.prs_dataset['date'] <= train_end_date]
+        else:
+            fit_data = self.prs_dataset
+
+        atm_idxs = fit_data.groupby(['tau']).apply(lambda x: (x['underlying'] - x['strike_price']).abs().idxmin())
+        atm_rows = fit_data.loc[atm_idxs]
 
         atm_fun = interp1d(atm_rows['tau'], atm_rows['total_var'], kind='linear', fill_value="extrapolate", bounds_error=False)
         self.prs_dataset['y_atm'] = atm_fun(self.prs_dataset['tau'])
@@ -243,19 +253,33 @@ class DataProcessor():
 
         Bug T1/D5 fixed: renamed from Prepare_prs_dataset.
         Bug T3 fixed: returns DataLoaders instead of raw tensors.
+        Chronological split: last 20% of dates used for validation to prevent
+        temporal data leakage (financial time series must not shuffle future into past).
         """
         print('Preparing train data')
         train_dataset = self.prs_dataset[
             (self.prs_dataset['date'] >= train_start_date) &
             (self.prs_dataset['date'] <= train_end_date)
-        ]
-        tau = from_numpy(train_dataset[['tau']].to_numpy(dtype='float64'))
-        logm = from_numpy(train_dataset[['logm']].to_numpy(dtype='float64'))
-        y = from_numpy(train_dataset[['total_var']].to_numpy(dtype='float64'))
-        y_atm = from_numpy(train_dataset[['y_atm']].to_numpy(dtype='float64'))
+        ].sort_values('date')
 
-        tau_train, tau_val, logm_train, logm_val, y_train, y_val, yATM_train, yATM_val = \
-            train_test_split(tau, logm, y, y_atm, test_size=0.2, shuffle=True)
+        # Chronological split: use last 20% of dates as validation
+        unique_dates = train_dataset['date'].unique()
+        unique_dates = np.sort(unique_dates)
+        split_idx = int(len(unique_dates) * 0.8)
+        val_start_date = unique_dates[split_idx]
+
+        train_part = train_dataset[train_dataset['date'] < val_start_date]
+        val_part = train_dataset[train_dataset['date'] >= val_start_date]
+
+        tau_train = from_numpy(train_part[['tau']].to_numpy(dtype='float64'))
+        logm_train = from_numpy(train_part[['logm']].to_numpy(dtype='float64'))
+        y_train = from_numpy(train_part[['total_var']].to_numpy(dtype='float64'))
+        yATM_train = from_numpy(train_part[['y_atm']].to_numpy(dtype='float64'))
+
+        tau_val = from_numpy(val_part[['tau']].to_numpy(dtype='float64'))
+        logm_val = from_numpy(val_part[['logm']].to_numpy(dtype='float64'))
+        y_val = from_numpy(val_part[['total_var']].to_numpy(dtype='float64'))
+        yATM_val = from_numpy(val_part[['y_atm']].to_numpy(dtype='float64'))
 
         train_ds = TensorDataset(tau_train, logm_train, y_train, yATM_train)
         val_ds = TensorDataset(tau_val, logm_val, y_val, yATM_val)
@@ -372,3 +396,158 @@ class DataProcessor():
             torch.from_numpy(targets),
             torch.from_numpy(masks),
         )
+
+    def Prepare_hyperiv_data(self):
+        """Group options by date for HyperIV training.
+
+        Returns:
+            List of (date, (tau, logm, total_var, y_atm)) tuples,
+            sorted by date. Each element is a per-day tensor set.
+        """
+        print('Preparing HyperIV data...')
+        import torch
+
+        df = self.prs_dataset.copy()
+        df = df.sort_values(['date', 'tau', 'logm'])
+        df = df.dropna(subset=['tau', 'logm', 'total_var', 'y_atm'])
+
+        surfaces = []
+        for date, group in df.groupby('date'):
+            tau = torch.from_numpy(group[['tau']].to_numpy(dtype='float64'))
+            logm = torch.from_numpy(group[['logm']].to_numpy(dtype='float64'))
+            tv = torch.from_numpy(group[['total_var']].to_numpy(dtype='float64'))
+            yatm = torch.from_numpy(group[['y_atm']].to_numpy(dtype='float64'))
+            surfaces.append((date, (tau, logm, tv, yatm)))
+
+        surfaces.sort(key=lambda x: x[0])
+        print(f'  {len(surfaces)} daily surfaces prepared')
+        return surfaces
+
+    def Prepare_diffusion_data(self, train_end_date, test_start_date,
+                                n_tau_grid=10, n_logm_grid=20, batch_size=16):
+        """Prepare gridded IV surface pairs for diffusion model.
+
+        Interpolates each day's options to a fixed (tau, logm) grid.
+        Returns consecutive-day pairs: (surface_today, surface_tomorrow, condition_features).
+
+        Condition features: [VIX, VIX_change, underlying_return, realized_vol_5d]
+        """
+        import torch
+        from scipy.interpolate import griddata
+
+        print('Preparing diffusion data...')
+
+        df = self.prs_dataset.copy()
+        df = df.sort_values(['date', 'tau', 'logm'])
+        df = df.dropna(subset=['tau', 'logm', 'total_var'])
+
+        # Build fixed grid
+        tau_range = np.linspace(df['tau'].quantile(0.05), df['tau'].quantile(0.95), n_tau_grid)
+        logm_range = np.linspace(df['logm'].quantile(0.05), df['logm'].quantile(0.95), n_logm_grid)
+        tau_grid, logm_grid = np.meshgrid(tau_range, logm_range)
+        grid_points = np.column_stack([tau_grid.ravel(), logm_grid.ravel()])
+        surface_dim = n_tau_grid * n_logm_grid
+
+        # Compute daily gridded surfaces
+        daily_surfaces = {}
+        for date, group in df.groupby('date'):
+            points = group[['tau', 'logm']].values
+            values = group['total_var'].values
+            if len(points) < 5:
+                continue
+            try:
+                grid_values = griddata(points, values, grid_points, method='linear')
+                # Fill NaNs with nearest neighbor
+                if np.any(np.isnan(grid_values)):
+                    nearest = griddata(points, values, grid_points, method='nearest')
+                    grid_values = np.where(np.isnan(grid_values), nearest, grid_values)
+                daily_surfaces[date] = grid_values.astype('float64')
+            except Exception:
+                continue
+
+        # Load VIX and underlying for condition features
+        vix = self.load_vix_data()
+        daily_underlying = df.groupby('date')['underlying'].first().reset_index()
+        daily_underlying = daily_underlying.sort_values('date')
+        daily_underlying['underlying_return'] = daily_underlying['underlying'].pct_change()
+        daily_underlying['realized_vol_5d'] = daily_underlying['underlying_return'].rolling(5).std()
+
+        # Build date-indexed features
+        feature_dict = {}
+        if vix is not None:
+            vix_dict = dict(zip(vix['date'], zip(vix['Close'], vix['vix_change'])))
+        else:
+            vix_dict = {}
+        und_dict = dict(zip(daily_underlying['date'],
+                             zip(daily_underlying['underlying_return'],
+                                 daily_underlying['realized_vol_5d'])))
+
+        sorted_dates = sorted(daily_surfaces.keys())
+
+        # Build consecutive pairs
+        surfaces_today = []
+        surfaces_tomorrow = []
+        cond_features = []
+
+        for i in range(len(sorted_dates) - 1):
+            d_today = sorted_dates[i]
+            d_tomorrow = sorted_dates[i + 1]
+
+            s_today = daily_surfaces[d_today]
+            s_tomorrow = daily_surfaces[d_tomorrow]
+
+            # Condition features for today
+            vix_val, vix_change = vix_dict.get(d_today, (0.2, 0.0))
+            und_ret, rvol = und_dict.get(d_today, (0.0, 0.01))
+            if np.isnan(vix_val) or vix_val is None:
+                vix_val = 0.2
+            if np.isnan(vix_change) or vix_change is None:
+                vix_change = 0.0
+            if np.isnan(und_ret) or und_ret is None:
+                und_ret = 0.0
+            if np.isnan(rvol) or rvol is None:
+                rvol = 0.01
+
+            surfaces_today.append(s_today)
+            surfaces_tomorrow.append(s_tomorrow)
+            cond_features.append([float(vix_val), float(vix_change), float(und_ret), float(rvol)])
+
+        surfaces_today = np.array(surfaces_today, dtype='float64')
+        surfaces_tomorrow = np.array(surfaces_tomorrow, dtype='float64')
+        cond_features = np.array(cond_features, dtype='float64')
+
+        print(f'  {len(surfaces_today)} consecutive-day pairs on {surface_dim}-dim grid')
+
+        # Split by date
+        dates_arr = sorted_dates[:-1]  # dates for "today"
+        train_mask = np.array([d <= train_end_date for d in dates_arr])
+        test_mask = np.array([d >= test_start_date for d in dates_arr])
+        val_mask = ~train_mask & ~test_mask
+
+        def make_loader(mask, shuffle):
+            if not np.any(mask):
+                return None
+            ds = torch.utils.data.TensorDataset(
+                torch.from_numpy(surfaces_today[mask]),
+                torch.from_numpy(surfaces_tomorrow[mask]),
+                torch.from_numpy(cond_features[mask]),
+            )
+            return torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=shuffle)
+
+        # If no explicit val dates, split train chronologically
+        if not np.any(val_mask):
+            train_indices = np.where(train_mask)[0]
+            split = int(len(train_indices) * 0.85)
+            actual_train = np.zeros(len(dates_arr), dtype=bool)
+            actual_val = np.zeros(len(dates_arr), dtype=bool)
+            actual_train[train_indices[:split]] = True
+            actual_val[train_indices[split:]] = True
+            train_loader = make_loader(actual_train, shuffle=True)
+            val_loader = make_loader(actual_val, shuffle=False)
+        else:
+            train_loader = make_loader(train_mask, shuffle=True)
+            val_loader = make_loader(val_mask, shuffle=False)
+
+        test_loader = make_loader(test_mask, shuffle=False)
+
+        return train_loader, val_loader, test_loader
