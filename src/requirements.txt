@@ -1,0 +1,10 @@
+numpy
+pandas
+matplotlib
+torch
+tqdm
+scipy
+scikit-learn
+QuantLib
+statsmodels
+ruptures

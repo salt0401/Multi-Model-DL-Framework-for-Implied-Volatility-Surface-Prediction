@@ -1,65 +1,168 @@
-import pandas as pd
+"""Proper evaluation script for trained base model.
+
+Loads trained model, runs on test set, computes RMSE/MAPE/IV-RMSE,
+reports arbitrage constraint violations, saves results to CSV.
+"""
+from model import MultiModel
+from dataset import DataProcessor
+from utils import load_config, parse_list_config, parse_date, set_seed, compute_rmse, compute_mape, compute_iv_rmse
+
+from argparse import ArgumentParser
+
+import torch
 import numpy as np
-from scipy.stats import norm
-from scipy.optimize import minimize
-import time
-from ast import literal_eval
-from itertools import product
-'''
-row = {
-    'strike_price':3600.0,
-    'put/call':'put',
-    'option_price':4.0,
-    'tau':0.06349206349206349,
-    'underlying':4698.292969,
-    'logm':-0.25875015849674393
-}
-'''
-
-def BS(S_beta, K_beta, logm, tau, implied_vol, indic='call'):
-        d1 = -logm/np.sqrt(tau)/implied_vol + np.sqrt(tau)*implied_vol/2
-        d2 = -logm/np.sqrt(tau)/implied_vol - np.sqrt(tau)*implied_vol/2
-        if indic == 'call':
-            return S_beta*norm.cdf(d1)-K_beta*norm.cdf(d2)
-        elif indic == 'put':
-            return K_beta*norm.cdf(-d2)-S_beta*norm.cdf(-d1)
-
-def implied_vol(row):
-    
-    def error(sigma):
-        return (BS(row['underlying_beta'], row['strike_price_beta'], row['logm'], row['tau'], sigma, row['put/call']) - row['option_price'])**2
-    
-    return minimize(error, x0=[0.2], bounds=[(0.0001, 1)])['x'][0]
+import pandas as pd
+import os
 
 
-#df = pd.read_csv('../dataset/2009_2023_impliVol.csv')
-#df = pd.read_csv('../dataset/2009_2023_intDivConcatnated.csv')
-#print(df.head())
-#df_min = df[df['implied_vol'] == 0.001].drop('implied_vol', axis=1)
-#df_part = df.iloc[1:10000, :]
-'''
-st = time.time()
-df_part['implied_vol'] = df_part.apply(implied_vol, axis=1)
-et = time.time()
-print(et-st)
-'''
-#df_min = df[df['implied_vol'] == 0.001]
-#print(df_min.shape)
-df = pd.read_csv('../dataset/prs_dataset_no_fat(clean).csv', index_col=0)
-df['logm'] = np.log(df['strike_price']/df['S']) - df['tau']*(df['d'] - df['r'])
-df['total_var'] = np.square(df['impl_volatility'])*df['tau']
-print(df.head())
-df.to_csv('../dataset/prs_dataset_no_fat(clean).csv')
+def check_calendar_arbitrage(tv_pred, tau):
+    """Check calendar spread arbitrage: total variance should increase with tau.
 
-taus = df['tau'].unique()
-min_logm = df['logm'].min()
-max_logm = df['logm'].max()
+    Returns fraction of violations among comparable pairs.
+    """
+    sorted_idx = np.argsort(tau)
+    tv_sorted = tv_pred[sorted_idx]
+    tau_sorted = tau[sorted_idx]
 
-logm_seq = [min_logm * 6, min_logm * 5, min_logm * 4, max_logm * 4, max_logm * 5, max_logm * 6]
+    violations = 0
+    total = 0
+    for i in range(1, len(tau_sorted)):
+        if tau_sorted[i] > tau_sorted[i-1]:
+            total += 1
+            if tv_sorted[i] < tv_sorted[i-1]:
+                violations += 1
+
+    return violations, total
 
 
-# Create a new DataFrame (tibble) with the unique values
-product_result_df = pd.DataFrame([(tau, logm) for tau in taus for logm in logm_seq],
-                                 columns=['tau', 'logm'])
-print(product_result_df.head())
-product_result_df.to_csv('../dataset/syn_data_c6.csv')
+def check_butterfly_arbitrage(tv_pred, logm, tau):
+    """Check butterfly arbitrage via numerical second derivative of w(k).
+
+    Groups by tau, computes d2w/dk2 numerically, counts negative density.
+    """
+    unique_taus = np.unique(tau)
+    violations = 0
+    total = 0
+
+    for t in unique_taus:
+        mask = np.isclose(tau, t, atol=1e-6)
+        k = logm[mask]
+        w = tv_pred[mask]
+
+        sort_idx = np.argsort(k)
+        k = k[sort_idx]
+        w = w[sort_idx]
+
+        if len(k) < 3:
+            continue
+
+        for i in range(1, len(k)-1):
+            dk1 = k[i] - k[i-1]
+            dk2 = k[i+1] - k[i]
+            if dk1 > 0 and dk2 > 0:
+                d2w = 2 * ((w[i+1] - w[i])/dk2 - (w[i] - w[i-1])/dk1) / (dk1 + dk2)
+                dw = (w[i+1] - w[i-1]) / (dk1 + dk2)
+                g = (1 - k[i]*dw/(2*w[i]))**2 - dw/4*(1/w[i] + 0.25) + d2w/2
+                total += 1
+                if g < 0:
+                    violations += 1
+
+    return violations, total
+
+
+def main():
+    parser = ArgumentParser()
+    parser.add_argument("--start_date", type=str, default=None)
+    parser.add_argument("--end_date", type=str, default=None)
+    parser.add_argument("--on_gpu", action='store_true')
+    args = parser.parse_args()
+
+    config = load_config('config.ini')
+
+    start_date = parse_date(args.start_date or config['training']['test_start_date'])
+    end_date = parse_date(args.end_date or config['training']['test_end_date'])
+
+    seed = config['training'].getint('seed')
+    set_seed(seed)
+
+    use_gpu = torch.cuda.is_available() and args.on_gpu
+    device = torch.device("cuda:0" if use_gpu else "cpu")
+    torch.set_default_dtype(torch.float64)
+
+    # Data
+    print('Loading data...')
+    dp = DataProcessor(config)
+    dp()
+    test_loader, test_df = dp.Prepare_test_data(start_date, end_date)
+
+    # Model
+    print('Loading model...')
+    model_path = config['save_path']['model_path']
+    hidden_sizes = [int(x) for x in parse_list_config(config['model_sett']['hidden_sizes'], int)]
+    ensemble_num = config['model_sett'].getint('ensemble_num')
+    model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num).to(device)
+
+    if not os.path.exists(model_path):
+        print(f'Model file not found at {model_path}. Train the model first.')
+        return
+
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+
+    # Inference
+    print('Running evaluation...')
+    all_preds = []
+    all_true = []
+    all_taus = []
+    all_logms = []
+
+    with torch.no_grad():
+        for tau, logm, y, y_atm in test_loader:
+            tau = tau.to(device)
+            logm = logm.to(device)
+            y_atm = y_atm.to(device)
+
+            output, _, _, _ = model(tau, logm, y_atm)
+            all_preds.append(output.cpu().numpy())
+            all_true.append(y.numpy())
+            all_taus.append(tau.cpu().numpy())
+            all_logms.append(logm.cpu().numpy())
+
+    tv_pred = np.concatenate(all_preds).flatten()
+    tv_true = np.concatenate(all_true).flatten()
+    taus = np.concatenate(all_taus).flatten()
+    logms = np.concatenate(all_logms).flatten()
+
+    # Metrics
+    print('\n=== Test Evaluation Results ===')
+    rmse = compute_rmse(tv_pred, tv_true)
+    mape = compute_mape(tv_pred, tv_true)
+    iv_rmse = compute_iv_rmse(tv_pred, tv_true, taus)
+    print(f'  Total Variance RMSE: {rmse:.6f}')
+    print(f'  Total Variance MAPE: {mape:.4f}')
+    print(f'  IV-RMSE:             {iv_rmse:.6f}')
+    print(f'  N samples:           {len(tv_pred)}')
+
+    # Arbitrage violations
+    print('\n=== Arbitrage Constraint Violations ===')
+    cal_viol, cal_total = check_calendar_arbitrage(tv_pred, taus)
+    but_viol, but_total = check_butterfly_arbitrage(tv_pred, logms, taus)
+    print(f'  Calendar: {cal_viol}/{cal_total} violations ({100*cal_viol/max(cal_total,1):.2f}%)')
+    print(f'  Butterfly: {but_viol}/{but_total} violations ({100*but_viol/max(but_total,1):.2f}%)')
+
+    # Save results
+    plot_path = config['save_path']['plot_path']
+    os.makedirs(plot_path, exist_ok=True)
+
+    results = {
+        'metric': ['TV_RMSE', 'TV_MAPE', 'IV_RMSE', 'Calendar_Violations', 'Butterfly_Violations', 'N_Samples'],
+        'value': [rmse, mape, iv_rmse, f'{cal_viol}/{cal_total}', f'{but_viol}/{but_total}', len(tv_pred)],
+    }
+    results_df = pd.DataFrame(results)
+    results_path = os.path.join(plot_path, 'test_results.csv')
+    results_df.to_csv(results_path, index=False)
+    print(f'\nResults saved to {results_path}')
+
+
+if __name__ == '__main__':
+    main()

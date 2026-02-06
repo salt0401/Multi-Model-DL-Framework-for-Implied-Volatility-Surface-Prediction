@@ -2,12 +2,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class BSModel(nn.Module):
-    def __init__(self, atm_fun):
+    # Bug M1 fixed: removed atm_fun param
+    def __init__(self):
         super(BSModel, self).__init__()
 
-    def forward(self, yATM):
-        return yATM
+    def forward(self, logm, yATM):
+        # Bug M2 fixed: accept (logm, yATM), return 4-tuple with zeros
+        grad_zeros = torch.zeros_like(yATM)
+        return yATM, grad_zeros, grad_zeros, grad_zeros
+
 
 class SSVIModel(nn.Module):
     def __init__(self, device='cpu', phi_fun='power_law'):
@@ -15,16 +20,15 @@ class SSVIModel(nn.Module):
         self.device = device
         self.phi_fun = phi_fun
 
-        self.raw_rho = nn.Parameter(torch.Tensor([0.5]))
+        self.raw_rho = nn.Parameter(torch.tensor([0.5], dtype=torch.float64))
         if self.phi_fun == 'heston_like':
-            self.raw_lambda = nn.Parameter(torch.Tensor([0]))
+            self.raw_lambda = nn.Parameter(torch.tensor([0.0], dtype=torch.float64))
         elif self.phi_fun == 'power_law':
-            self.raw_eta = nn.Parameter(torch.Tensor([0]))
-            self.raw_gamma = nn.Parameter(torch.Tensor([0]))
+            self.raw_eta = nn.Parameter(torch.tensor([0.0], dtype=torch.float64))
+            self.raw_gamma = nn.Parameter(torch.tensor([0.0], dtype=torch.float64))
         self.tanh = nn.Tanh()
 
-    def forward(self, logm, yATM): # (invm, tau): (inverse moneyness, time to maturity)
-        logm.requires_grad = True
+    def forward(self, logm, yATM):
         rho = self.tanh(self.raw_rho)
 
         if self.phi_fun == 'heston_like':
@@ -35,15 +39,24 @@ class SSVIModel(nn.Module):
             gamma = torch.exp(self.raw_gamma)
             phi = eta / (torch.pow(yATM, gamma) * torch.pow(1 + yATM, 1 - gamma))
 
-        output = yATM/2 * (1 + rho*phi*logm + torch.sqrt(torch.square(phi*logm) + 2*rho*phi*logm + 1))
-        
-        total_output = torch.sum(output)
+        # SSVI formula: w = theta/2 * (1 + rho*phi*k + sqrt((phi*k + rho)^2 + 1 - rho^2))
+        phi_k = phi * logm
+        disc = torch.square(phi_k + rho) + (1 - torch.square(rho))
+        sqrt_disc = torch.sqrt(disc)
+        output = yATM / 2 * (1 + rho * phi_k + sqrt_disc)
+
+        # Analytical gradients (improvement: avoids slow autograd for SSVI)
+        # dw/dk = theta/2 * (rho*phi + phi*(phi*k + rho) / sqrt(disc))
+        grad_logm1 = yATM / 2 * (rho * phi + phi * (phi_k + rho) / sqrt_disc)
+
+        # d2w/dk2 = theta/2 * phi^2 * (1 - rho^2) / disc^(3/2)
+        grad_logm2 = yATM / 2 * torch.square(phi) * (1 - torch.square(rho)) / torch.pow(disc, 1.5)
+
+        # No tau gradient from SSVI (tau enters only through yATM which is treated as input)
         grad_ttm1 = torch.zeros_like(logm)
-        grad_logm1 = torch.autograd.grad(total_output, logm, retain_graph=True, create_graph=True)[0]
-        total_grad_logm1 = torch.sum(grad_logm1)
-        grad_logm2 = torch.autograd.grad(total_grad_logm1, logm)[0]
 
         return output, grad_ttm1, grad_logm1, grad_logm2
+
 
 class SmileModel(nn.Module):
     def __init__(self, hidden_sizes=[5]*3, device='cpu', activation='softplus'):
@@ -54,34 +67,34 @@ class SmileModel(nn.Module):
         self.bias_logm = nn.Parameter(nn.init.normal_(torch.empty(1, self.J, dtype=torch.float64), mean=0, std=0.01))
         self.weights_ttm = nn.Parameter(nn.init.normal_(torch.empty(1, self.J, dtype=torch.float64), mean=0, std=0.01))
         self.bias_ttm = nn.Parameter(nn.init.normal_(torch.empty(1, self.J, dtype=torch.float64), mean=0, std=0.01))
-        self.weights_exp = nn.Parameter(nn.init.normal_(torch.empty(self.J, 1, dtype=torch.float64), mean=0, std=0.01))
-        self.bias_exp = nn.Parameter(nn.init.normal_(torch.empty(1, self.J, dtype=torch.float64), mean=0, std=0.01))
-        
+        # Bug X3 fixed: weights_exp shape (J, hidden_sizes[0]) to match matmul output
+        self.weights_exp = nn.Parameter(nn.init.normal_(torch.empty(self.J, hidden_sizes[0], dtype=torch.float64), mean=0, std=0.01))
+        self.bias_exp = nn.Parameter(nn.init.normal_(torch.empty(1, hidden_sizes[0], dtype=torch.float64), mean=0, std=0.01))
+
         self.hidden_layers = nn.ModuleList([nn.Linear(hidden_sizes[i], hidden_sizes[i+1]) for i in range(len(hidden_sizes)-1)])
         self.output_layers = nn.Linear(hidden_sizes[-1], 1)
 
         self.sigmoid = nn.Sigmoid()
-        
+
         if activation == 'tanh':
             self.activation = nn.Tanh()
         elif activation == 'softplus':
             self.activation = nn.Softplus()
 
-        self.smile_function = lambda logm : torch.sqrt(logm*torch.tanh(logm+0.5) + torch.tanh(-logm/2)+0.0005) #+0.0005 to avoid value too small
+        self.smile_function = lambda logm: torch.sqrt(logm*torch.tanh(logm+0.5) + torch.tanh(-logm/2)+0.0005)
 
-    def forward(self, ttm, logm): # (invm, tau): (inverse moneyness, time to maturity)
+    def forward(self, ttm, logm):
         ttm.requires_grad = True
         logm.requires_grad = True
         batch_size = ttm.shape[0]
 
-        term_logm = self.smile_function(torch.tile(self.bias_logm, (batch_size, 1)) + logm @ torch.exp(self.weights_logm)) #matrix multiplication
-        term_ttm = self.sigmoid(torch.tile(self.bias_ttm, (batch_size, 1)) + ttm @ torch.exp(self.weights_ttm)) #matrix multiplication
+        term_logm = self.smile_function(torch.tile(self.bias_logm, (batch_size, 1)) + logm @ torch.exp(self.weights_logm))
+        term_ttm = self.sigmoid(torch.tile(self.bias_ttm, (batch_size, 1)) + ttm @ torch.exp(self.weights_ttm))
         out_hidden = (term_logm * term_ttm) @ torch.exp(self.weights_exp) + torch.tile(self.bias_exp, (batch_size, 1))
-        #print(term_logm)
-        #print(term_ttm)
+
         for hidden_layer in self.hidden_layers:
             out_hidden = self.activation(hidden_layer(out_hidden))
-        
+
         output = self.output_layers(out_hidden)
 
         total_output = torch.sum(output)
@@ -91,6 +104,7 @@ class SmileModel(nn.Module):
         total_grad_logm1 = torch.sum(grad_logm1)
         grad_logm2 = torch.autograd.grad(total_grad_logm1, logm)[0]
         return output, grad_ttm1, grad_logm1, grad_logm2
+
 
 class SingleModel(nn.Module):
     def __init__(self, hidden_sizes, prior='SSVI', device='cpu'):
@@ -107,31 +121,37 @@ class SingleModel(nn.Module):
         output_NN, grad_ttm1_NN, grad_logm1_NN, grad_logm2_NN = self.NN(tau, logm)
         output = output_Prior * output_NN
 
+        # Product rule for derivatives
         grad_ttm1 = grad_ttm1_prior*output_NN + grad_ttm1_NN*output_Prior
         grad_logm1 = grad_logm1_prior*output_NN + grad_logm1_NN*output_Prior
         grad_logm2 = grad_logm2_prior*output_NN + grad_logm1_prior*grad_logm1_NN*2 + grad_logm2_NN*output_Prior
         return output, grad_ttm1, grad_logm1, grad_logm2
-    
+
+
 class SoftmaxModel(nn.Module):
+    # Bug M3 fixed: standardize input order, add yATM as 3rd input for volatility-regime-aware weighting
     def __init__(self, ensemble_num):
         super(SoftmaxModel, self).__init__()
-        self.sigmoid = nn.Sigmoid()  # sigma_2
-        self.in_hid_weights = nn.Parameter(nn.init.normal_(torch.empty(2, ensemble_num, dtype=torch.float64), mean=0, std=0.01))
+        self.sigmoid = nn.Sigmoid()
+        # 3 inputs now: logm, ttm, yATM
+        self.in_hid_weights = nn.Parameter(nn.init.normal_(torch.empty(3, ensemble_num, dtype=torch.float64), mean=0, std=0.01))
         self.in_hid_bias = nn.Parameter(nn.init.normal_(torch.empty(1, ensemble_num, dtype=torch.float64), mean=0, std=0.01))
         self.softmax = nn.Softmax(dim=1)
 
-    def forward(self, logm, ttm):
+    def forward(self, ttm, logm, yATM):
         batch_size = ttm.shape[0]
-        weight_numerator = self.sigmoid(torch.hstack((logm, ttm)) @ self.in_hid_weights + torch.tile(self.in_hid_bias, (batch_size, 1)))  # (batch,2)*(2*5)=(batch,5)
+        # Concatenate all 3 inputs: (batch, 3)
+        inputs = torch.hstack((ttm, logm, yATM))
+        weight_numerator = self.sigmoid(inputs @ self.in_hid_weights + torch.tile(self.in_hid_bias, (batch_size, 1)))
         weight_denominator = self.softmax(weight_numerator)
+        return weight_denominator
 
-        return weight_denominator #size = (1, ensemble num)
 
 class MultiModel(nn.Module):
     def __init__(self, hidden_sizes=[5]*3, ensemble_num=5, device='cpu'):
         super(MultiModel, self).__init__()
         self.device = device
-        self.ensemble_num = ensemble_num # the number of single models in Multi
+        self.ensemble_num = ensemble_num
         self.ensemble_list = nn.ModuleList()
         self.SoftmaxModel = SoftmaxModel(self.ensemble_num)
 
@@ -153,16 +173,18 @@ class MultiModel(nn.Module):
         grad_ttm1s = torch.cat(grad_ttm1s, dim=1)
         grad_logm1s = torch.cat(grad_logm1s, dim=1)
         grad_logm2s = torch.cat(grad_logm2s, dim=1)
-        
-        weights = self.SoftmaxModel(ttm, logm) #(batch, ensenble)
-        
+
+        # Bug M3 fixed: pass yATM to SoftmaxModel
+        weights = self.SoftmaxModel(ttm, logm, yATM)
+
         output = torch.sum(outputs*weights, dim=1, keepdim=True)
         grad_ttm1 = torch.sum(grad_ttm1s*weights, dim=1, keepdim=True)
         grad_logm1 = torch.sum(grad_logm1s*weights, dim=1, keepdim=True)
         grad_logm2 = torch.sum(grad_logm2s*weights, dim=1, keepdim=True)
 
         return output, grad_ttm1, grad_logm1, grad_logm2
-    
+
+
 class SimpleLoss(nn.Module):
     def __init__(self):
         super(SimpleLoss, self).__init__()
@@ -170,29 +192,42 @@ class SimpleLoss(nn.Module):
         self.MAPELoss = MAPELoss()
 
     def forward(self, y_pred, y_true):
-        return self.RMSELoss(y_pred, y_true)+self.MAPELoss(y_pred, y_true)
-    
+        return self.RMSELoss(y_pred, y_true) + self.MAPELoss(y_pred, y_true)
+
+
 class WeightedSumLoss(nn.Module):
-    def __init__(self, weights=[1,1,10,10,10,10]):
+    # Bug X1 fixed: use register_buffer with float64 tensor
+    # Bug M5 fixed: return single tensor, store individual losses as attribute
+    def __init__(self, weights=None):
         super(WeightedSumLoss, self).__init__()
+        if weights is None:
+            weights = [1, 1, 10, 10, 10, 10]
+        self.register_buffer('weights', torch.tensor(weights, dtype=torch.float64))
         self.RMSELoss = RMSELoss()
         self.MAPELoss = MAPELoss()
         self.CalenderLoss = Loss_calendar()
         self.ButterflyLoss = Loss_butterfly()
         self.LinearLoss = Loss_linear()
         self.UpperBoundLoss = Loss_upperbound()
-        self.weights = torch.IntTensor(weights)
+        self.individual_losses = None
 
     def forward(self, y_pred, y_true, logm, grad_tau, grad_logm, grad_logm_2nd, y_pred_c6, logm_c6, grad_logm_c6_2nd):
-        losses = torch.FloatTensor([self.RMSELoss(y_pred, y_true),
-                                    self.MAPELoss(y_pred, y_true),
-                                    self.CalenderLoss(y_pred, grad_tau),
-                                    self.ButterflyLoss(y_pred, logm, grad_logm, grad_logm_2nd),
-                                    self.LinearLoss(y_pred_c6, grad_logm_c6_2nd),
-                                    self.UpperBoundLoss(y_pred_c6, logm_c6)])
-        Total_loss = torch.dot(self.weights, losses)
-        return Total_loss, losses
-    
+        # Bug X2 fixed: use torch.stack() instead of torch.FloatTensor([...])
+        losses = torch.stack([
+            self.RMSELoss(y_pred, y_true),
+            self.MAPELoss(y_pred, y_true),
+            self.CalenderLoss(y_pred, grad_tau),
+            self.ButterflyLoss(y_pred, logm, grad_logm, grad_logm_2nd),
+            # Bug M4 fixed: Loss_linear only takes grad_logm_2nd
+            self.LinearLoss(grad_logm_c6_2nd),
+            self.UpperBoundLoss(y_pred_c6, logm_c6),
+        ])
+        self.individual_losses = losses.detach()
+        # Bug M5 fixed: return single tensor
+        total_loss = torch.dot(self.weights, losses)
+        return total_loss
+
+
 class RMSELoss(nn.Module):
     def __init__(self):
         super(RMSELoss, self).__init__()
@@ -201,8 +236,8 @@ class RMSELoss(nn.Module):
     def forward(self, y_pred, y_true):
         mse = self.mse_loss(y_pred, y_true)
         rmse = torch.sqrt(mse)
-        
         return rmse
+
 
 class MAPELoss(nn.Module):
     def __init__(self):
@@ -212,52 +247,43 @@ class MAPELoss(nn.Module):
         epsilon = 0.005
         absolute_percentage_error = torch.abs((y_true - y_pred) / (y_true + epsilon))
         mape = torch.mean(absolute_percentage_error)
-        
         return mape
-    
+
+
 class Loss_calendar(nn.Module):
     def __init__(self):
         super(Loss_calendar, self).__init__()
 
     def forward(self, y_pred, grad_tau):
-        #ttm.requires_grad = True
-        #neg_dy_dt = -1*torch.autograd.grad(y_pred, ttm, create_graph=True, retain_graph=True)[0]
-
         loss = torch.mean(torch.relu(-grad_tau))
         return loss
-    
+
+
 class Loss_butterfly(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self):
         super(Loss_butterfly, self).__init__()
 
     def forward(self, y_pred, logm, grad_logm, grad_logm_2nd):
-        #logm.requires_grad = True  # Enable gradients for input x
-        #dy_dlogm = torch.autograd.grad(y_pred, logm, create_graph=True, retain_graph=True)[0]
-        #d2y_dlogm2 = torch.autograd.grad(dy_dlogm, logm, create_graph=True, retain_graph=True)[0]
-
         g_k = (1-(logm * grad_logm)/(2*y_pred))**2 - grad_logm/4*(1/y_pred+0.25) + grad_logm_2nd/2
-
         loss = torch.mean(torch.relu(g_k))
         return loss
-    
+
+
 class Loss_linear(nn.Module):
+    # Bug M4 fixed: only takes grad_logm_2nd
     def __init__(self):
         super(Loss_linear, self).__init__()
 
-    def forward(self, y_pred, logm, grad_logm_2nd):
-        #logm.requires_grad = True  # Enable gradients for input x
-        #dy_dlogm = torch.autograd.grad(y_pred, logm, create_graph=True, retain_graph=True)[0]
-        #d2y_dlogm2 = torch.autograd.grad(dy_dlogm, logm, create_graph=True, retain_graph=True)[0]
-
+    def forward(self, grad_logm_2nd):
         loss = torch.mean(grad_logm_2nd)
         return loss
-    
+
+
 class Loss_upperbound(nn.Module):
     def __init__(self):
         super(Loss_upperbound, self).__init__()
 
     def forward(self, y_pred, logm):
         diff = y_pred - torch.abs(2 * logm)
-
         loss = torch.mean(torch.relu(diff))
         return loss

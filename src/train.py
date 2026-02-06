@@ -1,8 +1,8 @@
 from model import MultiModel, WeightedSumLoss, SimpleLoss
 from dataset import DataProcessor
+from utils import load_config, parse_list_config, parse_date, set_seed, setup_logging, MetricsTracker, EarlyStopping
 
 from argparse import ArgumentParser
-import configparser
 
 import torch
 from torch import optim
@@ -10,154 +10,203 @@ from tqdm import tqdm
 
 import os
 import matplotlib.pyplot as plt
-from datetime import datetime
-import time
-import math
 
-def printEpoch(epoch, loss):
-    epoch = epoch+1
-    if epoch % 10**int(math.log10(epoch)) == 0:
-        print('Epoch:', epoch, ', loss:', loss)
+
+def train_one_epoch(model, train_loader, c6_loader, loss_function, optimizer, device, gradient_clip=1.0):
+    """Train for one epoch. Returns average loss."""
+    model.train()
+    total_loss = 0.0
+    n_batches = 0
+
+    c6_iterator = iter(c6_loader)
+    train_bar = tqdm(train_loader, desc="Training")
+
+    for tau_train, logm_train, y_train, yATM_train in train_bar:
+        try:
+            tau_syn, logm_syn, yATM_syn = next(c6_iterator)
+        except StopIteration:
+            c6_iterator = iter(c6_loader)
+            tau_syn, logm_syn, yATM_syn = next(c6_iterator)
+
+        tau_train = tau_train.to(device)
+        logm_train = logm_train.to(device)
+        y_train = y_train.to(device)
+        yATM_train = yATM_train.to(device)
+        tau_syn = tau_syn.to(device)
+        logm_syn = logm_syn.to(device)
+        yATM_syn = yATM_syn.to(device)
+
+        output_train, grad_ttm1_train, grad_logm1_train, grad_logm2_train = model(tau_train, logm_train, yATM_train)
+        output_syn, _, _, grad_logm2_syn = model(tau_syn, logm_syn, yATM_syn)
+
+        # Bug T5/M5 fixed: loss_function now returns single tensor
+        loss = loss_function(
+            output_train, y_train, logm_train,
+            grad_ttm1_train, grad_logm1_train, grad_logm2_train,
+            output_syn, logm_syn, grad_logm2_syn
+        )
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+        optimizer.step()
+
+        total_loss += loss.item()
+        n_batches += 1
+        train_bar.set_postfix(loss=f'{loss.item():.6f}')
+
+    return total_loss / max(n_batches, 1)
+
+
+def validate(model, val_loader, c6_loader, loss_function, device):
+    """Validate model. Returns average loss."""
+    model.eval()
+    total_loss = 0.0
+    n_batches = 0
+
+    c6_iterator = iter(c6_loader)
+
+    with torch.no_grad():
+        for tau_val, logm_val, y_val, yATM_val in val_loader:
+            try:
+                tau_syn, logm_syn, yATM_syn = next(c6_iterator)
+            except StopIteration:
+                c6_iterator = iter(c6_loader)
+                tau_syn, logm_syn, yATM_syn = next(c6_iterator)
+
+            tau_val = tau_val.to(device)
+            logm_val = logm_val.to(device)
+            y_val = y_val.to(device)
+            yATM_val = yATM_val.to(device)
+            tau_syn = tau_syn.to(device)
+            logm_syn = logm_syn.to(device)
+            yATM_syn = yATM_syn.to(device)
+
+            output_val, grad_ttm1_val, grad_logm1_val, grad_logm2_val = model(tau_val, logm_val, yATM_val)
+            output_syn, _, _, grad_logm2_syn = model(tau_syn, logm_syn, yATM_syn)
+
+            loss = loss_function(
+                output_val, y_val, logm_val,
+                grad_ttm1_val, grad_logm1_val, grad_logm2_val,
+                output_syn, logm_syn, grad_logm2_syn
+            )
+
+            total_loss += loss.item()
+            n_batches += 1
+
+    return total_loss / max(n_batches, 1)
+
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("--train_start_date", type=str, default='20140101')
-    parser.add_argument("--train_end_date", type=str, default='20201231')
-    parser.add_argument("--test_start_date", type=str, default='20210101')
-    parser.add_argument("--test_end_date", type=str, default='20211231')
     parser.add_argument("--on_gpu", action='store_true')
-    parser.add_argument("--epochs", type=int, default=20)
-
-    config = configparser.ConfigParser()
-    config.read('config.ini')
-
-    # Set if use gpu or not
-    # U can check your gpu, and go to pytorch, install the version fits your cuda
-    print('Start')
+    parser.add_argument("--epochs", type=int, default=None)
     args = parser.parse_args()
-    use_gpu = torch.cuda.is_available() & args.on_gpu
-    print('Use gpu:', use_gpu)
-    device = torch.device(f"cuda:0" if use_gpu else "cpu")
 
-    # Set the date range of train data and test data
-    # When training the model, the train data should not overlap with the test data
-        # Or you don't know if the model is good at solving the problem only for the train data 
-        # Study for the exam, don't peek at problems of the exam paper
-    train_start_date = datetime.strptime(args.train_start_date, '%Y%m%d')
-    train_end_date = datetime.strptime(args.train_end_date, '%Y%m%d')
-    test_start_date = datetime.strptime(args.test_start_date, '%Y%m%d')
-    test_end_date = datetime.strptime(args.test_end_date, '%Y%m%d')
-    
-    # Preprocess the data and get the train data
-    print('Preprocessing...')
-    dp = DataProcessor('../dataset/','2009_2023','TWII.csv', 'prs_dataset_no_fat(clean)')
+    config = load_config('config.ini')
+
+    # Seed
+    seed = config['training'].getint('seed')
+    set_seed(seed)
+
+    # Logging
+    log_dir = config['save_path']['log_dir']
+    logger = setup_logging(log_dir, 'base_model')
+
+    # Device
+    use_gpu = torch.cuda.is_available() and args.on_gpu
+    logger.info(f'Use GPU: {use_gpu}')
+    device = torch.device("cuda:0" if use_gpu else "cpu")
+
+    # Dates
+    train_start_date = parse_date(config['training']['train_start_date'])
+    train_end_date = parse_date(config['training']['train_end_date'])
+
+    # Data
+    logger.info('Preprocessing...')
+    dp = DataProcessor(config)
     dp()
-    data_gen = dp.Prepare_prs_dataset(train_start_date, train_end_date, args.epochs)
-    print('End of data preprocessing.')
 
-    # Set the model, the loss function, the optimizer, the scheduler
-    # Optimizer: once get the loss, it will adjust the model parameter by the loss
-        # Different types of optimizer makes different adjustment
-    # Scheduler: Set the learning rate at each epoch
-        # If loss points the direction to adjust, learning rate is the range of adjustment
-    print('Model generating...')
+    batch_size = config['training'].getint('batch_size')
+    # Bug T1/D5 fixed: call Prepare_train_data (not Prepare_prs_dataset)
+    # Bug T3 fixed: returns DataLoaders
+    train_loader, val_loader, c6_loader = dp.Prepare_train_data(train_start_date, train_end_date, batch_size)
+    logger.info('End of data preprocessing.')
+
+    # Model
+    logger.info('Model generating...')
     learning_rate = config['model_sett'].getfloat('learning_rate')
     ensemble_num = config['model_sett'].getint('ensemble_num')
+    hidden_sizes = [int(x) for x in parse_list_config(config['model_sett']['hidden_sizes'], int)]
+    loss_weights = parse_list_config(config['model_sett']['loss_weights'])
+
     torch.set_default_dtype(torch.float64)
-    torch.manual_seed(42)
-    Model = MultiModel(ensemble_num=ensemble_num).to(device)
-    loss_function = WeightedSumLoss(device).to(device)
-    optimizer = optim.AdamW(Model.parameters(), lr=learning_rate)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[i for i in range(500, args.epochs, 5)], gamma=0.5)
+    model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num).to(device)
+    # Bug T2 fixed: pass weights list instead of device
+    loss_function = WeightedSumLoss(weights=loss_weights).to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
 
-    print('Training...')
-    running_train_loss = [] # The train loss computed at each epoch
-    running_test_loss = []
+    epochs = args.epochs if args.epochs is not None else config['training'].getint('epochs')
+    milestone_start = config['training'].getint('scheduler_milestones_start')
+    milestone_step = config['training'].getint('scheduler_milestones_step')
+    scheduler_gamma = config['training'].getfloat('scheduler_gamma')
+    gradient_clip = config['training'].getfloat('gradient_clip')
 
-    for epoch, train_loader, test_loader, c6_loader in data_gen:
-        Model.train()
- 
-        #to make the longer train data and shorter c6 data run simutaneously
-        train_bar = tqdm(train_loader, f"Train epoch {epoch+1}/{args.epochs}") # progress bar
-        c6_iterator = iter(c6_loader)
-        for tau_train, logm_train, y_train, yATM_train in train_bar:
-            try:
-                tau_syn, logm_syn, yATM_syn = next(c6_iterator)
-            except StopIteration:
-                c6_iterator = iter(c6_loader) 
-                tau_syn, logm_syn, yATM_syn = next(c6_iterator)
-        
-            tau_train, logm_train, y_train, yATM_train = tau_train.to(device), logm_train.to(device), y_train.to(device), yATM_train.to(device)
-            tau_syn, logm_syn, yATM_syn = tau_syn.to(device), logm_syn.to(device), yATM_syn.to(device)
-            output_train, grad_ttm1_train, grad_logm1_train, grad_logm2_train = Model(tau_train, logm_train, yATM_train)
-            output_syn, _, _, grad_logm2_syn = Model(tau_syn, logm_syn, yATM_syn)
-        
-            totalloss = loss_function(output_train, y_train, logm_train, 
-                                 grad_ttm1_train, grad_logm1_train, grad_logm2_train, 
-                                 output_syn, logm_syn, grad_logm2_syn)
+    scheduler = optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=[i for i in range(milestone_start, epochs, milestone_step)],
+        gamma=scheduler_gamma
+    )
 
-            optimizer.zero_grad()
-            totalloss.backward()
-            optimizer.step()
-            scheduler.step()
+    # Tracking
+    metrics = MetricsTracker()
+    patience = config['training'].getint('early_stopping_patience')
+    early_stopping = EarlyStopping(patience=patience)
 
-            totalloss = totalloss.cpu().item()
-            running_train_loss.append(totalloss)
-            
-        for tau_test, logm_test, y_test, yATM_test in test_loader:
-            Model.eval()
-
-            try:
-                tau_syn, logm_syn, yATM_syn = next(c6_iterator)
-            except StopIteration:
-                c6_iterator = iter(c6_loader) 
-                tau_syn, logm_syn, yATM_syn = next(c6_iterator)
-
-            tau_test, logm_test, y_test, yATM_test = tau_test.to(device), logm_test.to(device), y_test.to(device), yATM_test.to(device)
-            tau_syn, logm_syn, yATM_syn = tau_syn.to(device), logm_syn.to(device), yATM_syn.to(device)
-            output_test, grad_ttm1_test, grad_logm1_test, grad_logm2_test = Model(tau_test, logm_test, yATM_test)
-            output_syn, _, _, grad_logm2_syn = Model(tau_syn, logm_syn, yATM_syn)
-
-            totalloss = loss_function(output_test, y_test, logm_test, 
-                                 grad_ttm1_test, grad_logm1_test, grad_logm2_test, 
-                                 output_syn, logm_syn, grad_logm2_syn)
-            
-            totalloss = totalloss.cpu().item()
-            running_test_loss.append(totalloss)
-    
-    # Evaluate the result
-    # If loss is smaller than the smallest loss recorded, consider the model now is the best trained model
-    print('Evaluating result...')
-    Model.eval()
-    test_loss = 0
-    plot_path = config['save_path']['plot_path']
-    model_path = config['save_path']['model_path']
+    logger.info('Training...')
     best_loss = config['model_sett'].getfloat('best_loss')
-    if not os.path.exists(plot_path):
-        os.makedirs(plot_path)
+    model_path = config['save_path']['model_path']
+    plot_path = config['save_path']['plot_path']
+    os.makedirs(plot_path, exist_ok=True)
 
-    if totalloss < best_loss:
-        config['model_sett']['best_loss'] = str(totalloss)
-        with open('config.ini', 'w') as configfile:
-            config.write(configfile)
+    for epoch in range(epochs):
+        train_loss = train_one_epoch(model, train_loader, c6_loader, loss_function, optimizer, device, gradient_clip)
+        val_loss = validate(model, val_loader, c6_loader, loss_function, device)
 
-        torch.save(Model.state_dict(), model_path)
-    
-    # Make a plot to check how the training
-    # y-axis is the loss at each epoch
-    # Under best situation, the loss should be decreasing with no big fluctuation
-        # And the train loss should not has too much diff from test loss
-    train_start_date = train_start_date.strftime("%Y%m%d")
-    train_end_date = train_end_date.strftime("%Y%m%d")
-    test_start_date = test_start_date.strftime("%Y%m%d")
-    test_end_date = test_end_date.strftime("%Y%m%d")
-    plt.plot(running_train_loss, label='Training Loss')
-    plt.plot(running_test_loss, label='Testing Loss')
-    plt.xlabel('running')
+        # Bug T4 fixed: scheduler.step() in epoch loop, not batch loop
+        scheduler.step()
+
+        is_best = metrics.update(epoch, train_loss, val_loss)
+        logger.info(f'Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.6f} - Val Loss: {val_loss:.6f} - LR: {scheduler.get_last_lr()[0]:.2e}')
+
+        if is_best and val_loss < best_loss:
+            best_loss = val_loss
+            config['model_sett']['best_loss'] = str(best_loss)
+            with open('config.ini', 'w') as configfile:
+                config.write(configfile)
+            torch.save(model.state_dict(), model_path)
+            logger.info(f'  New best model saved (val_loss={val_loss:.6f})')
+
+        if early_stopping.step(val_loss):
+            logger.info(f'Early stopping at epoch {epoch+1}')
+            break
+
+    # Save metrics
+    metrics.save(os.path.join(log_dir, 'metrics.json'))
+
+    # Loss plot
+    plt.figure(figsize=(10, 6))
+    plt.plot(metrics.train_losses, label='Training Loss')
+    plt.plot(metrics.val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.legend()
-    plt.savefig(f'{plot_path}/train{train_start_date}to{train_end_date}_test{test_start_date}to{test_end_date}_{epoch}epoch.png')
-    print('Finished Training')
+    plt.title('Training Progress')
+    plt.savefig(os.path.join(plot_path, f'training_loss_{epochs}epochs.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+
+    logger.info('Finished Training')
+
 
 if __name__ == '__main__':
     main()
