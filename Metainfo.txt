@@ -1,0 +1,19 @@
+Name of Quantlet: DEDA_2024_NYCU
+
+Published in: DEDA class 2024
+
+Description: Trying to use Combination of comprehensive svm model and nn model with ensemble adjustment to predict the Taiwan index implied volatility. 
+
+Submitted: 04 April 2024
+
+Keywords: 
+- Implied volatility
+- NN model
+- prediction 
+- Financial engineering
+- Options 
+- Web scraping
+- ensemble learning
+- Support vector machine
+
+Author: Bo-Hsien Wu, Wei-Chen Liao, Yen,Lin ,Liu,Yun-De
