@@ -141,11 +141,11 @@ def mock_config():
     }
     cfg['save_path'] = {
         'plot_path': '../LossPlot',
-        'model_path': '../MultiModel.pt',
-        'dgm_model_path': '../DGMModel.pt',
-        'adjustment_model_path': '../AdjustmentModel.pt',
-        'hyperiv_model_path': '../HyperIVModel.pt',
-        'diffusion_model_path': '../DiffusionModel.pt',
+        'model_path': '../models/MultiModel.pt',
+        'dgm_model_path': '../models/DGMModel.pt',
+        'adjustment_model_path': '../models/AdjustmentModel.pt',
+        'hyperiv_model_path': '../models/HyperIVModel.pt',
+        'diffusion_model_path': '../models/DiffusionModel.pt',
         'log_dir': '../logs',
     }
     cfg['dgm'] = {

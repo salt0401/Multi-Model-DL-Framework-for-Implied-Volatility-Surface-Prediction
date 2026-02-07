@@ -1,4 +1,4 @@
-from model import MultiModel, WeightedSumLoss, SimpleLoss
+from model import MultiModel, WeightedSumLoss
 from dataset import DataProcessor
 from utils import load_config, parse_list_config, parse_date, set_seed, setup_logging, MetricsTracker, EarlyStopping
 

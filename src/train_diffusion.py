@@ -122,7 +122,7 @@ def main():
 
     metrics = MetricsTracker()
     early_stopping = EarlyStopping(patience=100)
-    model_path = config['save_path'].get('diffusion_model_path', '../DiffusionModel.pt')
+    model_path = config['save_path'].get('diffusion_model_path', '../models/DiffusionModel.pt')
     best_val_rmse = float('inf')
 
     logger.info('Training DDPM...')

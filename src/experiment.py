@@ -1,4 +1,4 @@
-from model import MultiModel, SimpleLoss
+from model import MultiModel
 from dataset import DataProcessor
 from utils import load_config, parse_list_config, parse_date, set_seed, compute_rmse, compute_mape, compute_iv_rmse
 

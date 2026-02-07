@@ -270,7 +270,7 @@ def main():
 
     metrics = MetricsTracker()
     early_stopping = EarlyStopping(patience=50)
-    model_path = config['save_path'].get('hyperiv_model_path', '../HyperIVModel.pt')
+    model_path = config['save_path'].get('hyperiv_model_path', '../models/HyperIVModel.pt')
     best_val_loss = float('inf')
 
     logger.info('Training HyperIV...')
