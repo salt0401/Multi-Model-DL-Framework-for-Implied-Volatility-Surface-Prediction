@@ -1,11 +1,24 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+
+# Claude Code
 .claude/
-nul
-*.pt
+
+# Model weights (large binary files)
+models/*.pt
 *.pkl
+
+# Runtime outputs
 LossPlot/
 logs/
+
+# Data (too large for git)
 dataset/
-.pytest_cache/
+
+# OS artifacts
+nul
+.DS_Store
+Thumbs.db

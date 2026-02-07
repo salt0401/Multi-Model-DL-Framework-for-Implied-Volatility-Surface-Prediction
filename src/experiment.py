@@ -19,19 +19,20 @@ def run_base_model_inference(model, test_loader, device):
     all_taus = []
     all_logms = []
 
-    with torch.no_grad():
-        for tau, logm, y, y_atm in test_loader:
-            tau = tau.to(device)
-            logm = logm.to(device)
-            y_atm = y_atm.to(device)
+    # Note: SmileModel.forward uses autograd.grad(create_graph=True) internally,
+    # so we cannot wrap the forward pass in torch.no_grad(). We detach outputs instead.
+    for tau, logm, y, y_atm in test_loader:
+        tau = tau.to(device)
+        logm = logm.to(device)
+        y_atm = y_atm.to(device)
 
-            # Bug E1 fixed: unpack tuple, take first element
-            output, _, _, _ = model(tau, logm, y_atm)
+        # Bug E1 fixed: unpack tuple, take first element
+        output, _, _, _ = model(tau, logm, y_atm)
 
-            all_preds.append(output.cpu().numpy())
-            all_true.append(y.numpy())
-            all_taus.append(tau.cpu().numpy())
-            all_logms.append(logm.cpu().numpy())
+        all_preds.append(output.detach().cpu().numpy())
+        all_true.append(y.numpy())
+        all_taus.append(tau.detach().cpu().numpy())
+        all_logms.append(logm.detach().cpu().numpy())
 
     return (
         np.concatenate(all_preds).flatten(),

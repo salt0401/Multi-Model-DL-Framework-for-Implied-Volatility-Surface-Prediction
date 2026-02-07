@@ -116,17 +116,18 @@ def main():
     all_taus = []
     all_logms = []
 
-    with torch.no_grad():
-        for tau, logm, y, y_atm in test_loader:
-            tau = tau.to(device)
-            logm = logm.to(device)
-            y_atm = y_atm.to(device)
+    # Note: SmileModel.forward uses autograd.grad(create_graph=True) internally,
+    # so we cannot wrap the forward pass in torch.no_grad(). We detach outputs instead.
+    for tau, logm, y, y_atm in test_loader:
+        tau = tau.to(device)
+        logm = logm.to(device)
+        y_atm = y_atm.to(device)
 
-            output, _, _, _ = model(tau, logm, y_atm)
-            all_preds.append(output.cpu().numpy())
-            all_true.append(y.numpy())
-            all_taus.append(tau.cpu().numpy())
-            all_logms.append(logm.cpu().numpy())
+        output, _, _, _ = model(tau, logm, y_atm)
+        all_preds.append(output.detach().cpu().numpy())
+        all_true.append(y.numpy())
+        all_taus.append(tau.detach().cpu().numpy())
+        all_logms.append(logm.detach().cpu().numpy())
 
     tv_pred = np.concatenate(all_preds).flatten()
     tv_true = np.concatenate(all_true).flatten()

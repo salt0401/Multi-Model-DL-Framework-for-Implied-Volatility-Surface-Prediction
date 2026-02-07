@@ -189,7 +189,14 @@ class AdjustmentLoss(nn.Module):
         from scipy.stats import gaussian_kde
 
         targets_flat = targets.flatten()
-        kde = gaussian_kde(targets_flat, bw_method=self.kde_bandwidth)
+        # Subsample for KDE fitting to avoid O(n^2) on large datasets
+        max_kde_samples = 10000
+        if len(targets_flat) > max_kde_samples:
+            rng = np.random.RandomState(42)
+            subsample_idx = rng.choice(len(targets_flat), max_kde_samples, replace=False)
+            kde = gaussian_kde(targets_flat[subsample_idx], bw_method=self.kde_bandwidth)
+        else:
+            kde = gaussian_kde(targets_flat, bw_method=self.kde_bandwidth)
         density = kde(targets_flat)
 
         # Inverse density weighting, capped to avoid extreme weights

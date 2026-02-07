@@ -106,7 +106,9 @@ class SmileModel(nn.Module):
         grad_ttm1 = grad1[0].clone()
         grad_logm1 = grad1[1].clone()
         total_grad_logm1 = torch.sum(grad_logm1)
-        grad_logm2 = torch.autograd.grad(total_grad_logm1, logm, create_graph=True)[0]
+        # retain_graph=True keeps forward graph alive for loss.backward();
+        # no create_graph here avoids third-order gradient instability during training.
+        grad_logm2 = torch.autograd.grad(total_grad_logm1, logm, retain_graph=True)[0]
         return output, grad_ttm1, grad_logm1, grad_logm2
 
 
@@ -279,7 +281,8 @@ class Loss_linear(nn.Module):
         super(Loss_linear, self).__init__()
 
     def forward(self, grad_logm_2nd):
-        loss = torch.mean(grad_logm_2nd)
+        # Use abs to enforce d2w/dk2 → 0 (linear wings), not allow negative drift
+        loss = torch.mean(torch.abs(grad_logm_2nd))
         return loss
 
 

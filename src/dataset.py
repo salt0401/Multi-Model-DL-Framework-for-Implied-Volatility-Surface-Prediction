@@ -54,6 +54,9 @@ class DataProcessor():
         print('Preprocessing dataset...')
         if os.path.exists(self.preprocessed):
             prs_dataset = pd.read_csv(self.preprocessed, parse_dates=['date', 'exdate'], index_col=0)
+            # Handle legacy column name: CSV may have 'S' instead of 'underlying'
+            if 'S' in prs_dataset.columns and 'underlying' not in prs_dataset.columns:
+                prs_dataset = prs_dataset.rename(columns={'S': 'underlying'})
             return prs_dataset
 
         print('\tPreprocessed dataset not exist, preprocessing...')
@@ -350,13 +353,13 @@ class DataProcessor():
         df = pd.merge(df, vix[['date', 'vix_change']], on='date', how='left')
 
         # Compute model predictions
+        # Note: SmileModel.forward uses autograd.grad internally, cannot use torch.no_grad()
         base_model.eval()
-        with torch.no_grad():
-            tau_t = from_numpy(df[['tau']].to_numpy(dtype='float64')).to(device)
-            logm_t = from_numpy(df[['logm']].to_numpy(dtype='float64')).to(device)
-            yatm_t = from_numpy(df[['y_atm']].to_numpy(dtype='float64')).to(device)
-            tv_pred, _, _, _ = base_model(tau_t, logm_t, yatm_t)
-            df['tv_pred'] = tv_pred.cpu().numpy().flatten()
+        tau_t = from_numpy(df[['tau']].to_numpy(dtype='float64')).to(device)
+        logm_t = from_numpy(df[['logm']].to_numpy(dtype='float64')).to(device)
+        yatm_t = from_numpy(df[['y_atm']].to_numpy(dtype='float64')).to(device)
+        tv_pred, _, _, _ = base_model(tau_t, logm_t, yatm_t)
+        df['tv_pred'] = tv_pred.detach().cpu().numpy().flatten()
 
         df['itm_otm'] = (df['logm'] > 0).astype(float)
         df['tv_ratio'] = df['total_var'] / (df['tv_pred'] + 1e-8)
