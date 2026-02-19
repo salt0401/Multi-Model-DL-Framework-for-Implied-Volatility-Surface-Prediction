@@ -8,7 +8,7 @@ __pycache__/
 .claude/
 
 # Model weights (large binary files)
-models/*.pt
+*.pt
 *.pkl
 
 # Runtime outputs
@@ -17,6 +17,9 @@ logs/
 
 # Data (too large for git)
 dataset/
+
+# Large docs
+docs/*.pdf
 
 # OS artifacts
 nul
