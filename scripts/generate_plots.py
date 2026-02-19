@@ -238,11 +238,11 @@ def plot_model_comparison():
     """Figure 7: Grouped bar chart comparing all models."""
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
-    # Point prediction models
+    # Point prediction models (2025-2026 test set)
     models = ['Base\n(SSVI+NN)', 'HyperIV']
-    tv_rmse = [0.0134, 0.0074]
-    mape = [44.1, 20.7]
-    iv_rmse = [0.209, 0.076]
+    tv_rmse = [0.0120, 0.0056]
+    mape = [33.0, 20.0]
+    iv_rmse = [0.219, 0.113]
 
     colors = ['#4472C4', '#ED7D31']
 
@@ -264,7 +264,7 @@ def plot_model_comparison():
     for i, v in enumerate(iv_rmse):
         axes[2].text(i, v + 0.003, f'{v:.3f}', ha='center', fontsize=10)
 
-    fig.suptitle('Model Comparison: Base vs HyperIV (Point Prediction)', fontsize=13)
+    fig.suptitle('Model Comparison: Base vs HyperIV — Test 2025-2026', fontsize=13)
     fig.tight_layout()
     fig.savefig(os.path.join(FIG_DIR, 'model_comparison.png'), dpi=150)
     plt.close(fig)

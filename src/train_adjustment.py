@@ -58,6 +58,8 @@ def oversample_crisis_indices(dates, event_dates, factor=5):
 def main():
     parser = ArgumentParser()
     parser.add_argument("--on_gpu", action='store_true')
+    parser.add_argument("--finetune", type=str, default=None,
+                        help='Path to checkpoint for fine-tuning (transfer learning)')
     args = parser.parse_args()
 
     config = load_config('config.ini')
@@ -133,7 +135,16 @@ def main():
         prediction_target=prediction_target,
     ).double().to(device)
 
-    optimizer = optim.Adam(adj_model.parameters(), lr=adj_cfg.getfloat('learning_rate'))
+    # Fine-tuning: load pretrained weights (handles input_dim mismatch)
+    if args.finetune and os.path.exists(args.finetune):
+        from transfer import load_finetune_weights, setup_finetune_optimizer
+        logger.info(f'Fine-tuning from: {args.finetune}')
+        lr = adj_cfg.getfloat('learning_rate')
+        transferred, reinitialized = load_finetune_weights(adj_model, args.finetune, device)
+        optimizer = setup_finetune_optimizer(adj_model, transferred, reinitialized,
+                                             base_lr=lr * 0.1, new_lr=lr)
+    else:
+        optimizer = optim.Adam(adj_model.parameters(), lr=adj_cfg.getfloat('learning_rate'))
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=50, factor=0.5)
     epochs = adj_cfg.getint('epochs')
 

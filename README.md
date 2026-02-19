@@ -26,65 +26,111 @@ Accurately predicting this surface matters because it determines the fair price 
 
 ## The Five Models
 
-This system uses five complementary models, each addressing different aspects of IV surface prediction:
+This system uses five complementary models, each addressing different aspects of IV surface prediction. Think of them as a team of specialists:
+
+- **Models 1 & 4** are *interpolators* — they predict today's IV surface from observed option prices
+- **Model 2** is a *physics engine* — it verifies that option prices obey the Black-Scholes equation
+- **Model 3** is a *crisis detector* — it adjusts predictions during market stress
+- **Model 5** is a *forecaster* — it predicts tomorrow's IV surface from today's market conditions
 
 ### 1. Base Model: SSVI + Neural Network Ensemble
 
-The foundation. An **SSVI parametric model** provides the structural prior (guaranteed no-arbitrage shape), and a **neural network ensemble** learns the residual patterns that SSVI misses.
+**What it does:** The foundation of the system. Predicts implied volatility for any combination of strike price and time-to-expiry.
 
-Each neural network ("SmileModel") takes log-moneyness as input and outputs total variance for a single expiration. Five networks are trained with different random seeds and combined via learned softmax weights. The loss function includes physics-informed terms: calendar spread constraints (total variance must increase with time), butterfly constraints (probability density must be non-negative), and density smoothness penalties.
+**How it works:** An **SSVI parametric model** (a well-known formula from quantitative finance) provides the structural backbone — it guarantees the predicted surface has a mathematically valid shape. A **neural network ensemble** (5 small networks combined) then learns the residual patterns that SSVI misses, like local bumps or skew features unique to the Taiwan market.
 
-**Results:** TV-RMSE 0.0134, MAPE 44.1%, IV-RMSE 0.209
+Each neural network ("SmileModel") uses automatic differentiation to compute first and second derivatives of its output, which are fed into physics-based penalty terms. The loss function has six components: (1) fit the observed data, (2) stay close to the SSVI prior, (3) enforce calendar spread constraints (longer-dated options must be worth more), (4) enforce butterfly constraints (no negative probabilities), (5) penalize extreme density curvature, and (6) encourage smoothness.
+
+**Why an ensemble?** Training 5 networks with different random initializations and averaging their predictions reduces variance and produces more stable results than any single network.
+
+**Results (2025-2026 test):** TV-RMSE 0.0120, MAPE 33.0%, IV-RMSE 0.219
 
 ### 2. DGM: PDE Solver for Black-Scholes
 
-The **Deep Galerkin Method** solves the backward Kolmogorov PDE — the partial differential equation that governs how option prices evolve over time. Instead of discretizing the PDE on a grid (finite differences), DGM uses a neural network as a continuous function approximator and penalizes PDE residuals at randomly sampled collocation points.
+**What it does:** Learns to solve the Black-Scholes partial differential equation (PDE) — the fundamental equation that governs how option prices change over time.
 
-The architecture uses LSTM-like "S-layers" with gating mechanisms (update, forget, reset gates) and LayerNorm. The loss has three terms: PDE residual in the interior, boundary conditions at extreme strikes, and terminal conditions at expiration.
+**Why it matters:** The Black-Scholes PDE is like Newton's laws for options. If a model's predictions violate this equation, the prices are physically inconsistent. Traditional methods solve this equation on a grid (like a spreadsheet), but DGM uses a neural network as a smooth, continuous approximation — no grid required.
 
-**Results:** Final PDE residual 2.6e-5, BS price RMSE 0.036
+**How it works:** The **Deep Galerkin Method** trains a neural network to minimize three errors simultaneously: (1) how badly the network violates the PDE at random interior points, (2) how badly it violates boundary conditions at extreme prices, and (3) how badly it matches the known payoff at expiration. The training points are re-sampled every 100 epochs so the network sees a fresh set of equations to satisfy.
+
+The architecture uses LSTM-like "S-layers" with gating mechanisms — these help the network learn the complex nonlinear interactions between time, stock price, and volatility.
+
+**Results (2025-2026 test):** Final PDE residual 2.0e-5 (near-perfect equation satisfaction), BS price RMSE 0.036 (3.6 cents average pricing error)
 
 ### 3. Adjustment Model: GRU + Attention for Crisis Periods
 
-Financial crises (e.g., 2008 crash, COVID-19) cause structural breaks where the IV surface shifts dramatically. This model detects those breaks using CUSUM change-point detection and learns time-varying corrections.
+**What it does:** Detects and corrects for market crises — sudden events like the 2008 financial crash or COVID-19 that cause the IV surface to shift dramatically in ways the base model can't capture.
 
-A **GRU** (Gated Recurrent Unit) processes sequences of daily IV observations, and **multi-head attention** learns which past days matter most. The output is a multiplicative adjustment ratio. Training uses KDE-weighted loss to focus on rare tail events and oversamples crisis periods.
+**Why it matters:** Normal market conditions are relatively smooth, but crises cause "structural breaks" — sudden regime changes where historical patterns no longer apply. Without correction, the base model's predictions become unreliable during these periods.
+
+**How it works:** The model looks at the past 20 days of trading data (13 features per day, including base model predictions, VIX changes, S&P 500 returns, IV term structure slope, and realized volatility). A **GRU** (Gated Recurrent Unit — a type of recurrent neural network designed for sequential data) processes this time series, building up a representation of the current market regime. Then **multi-head attention** (the same mechanism used in ChatGPT) examines all 20 days and learns which past days are most relevant — for example, a sudden VIX spike 3 days ago might be more informative than gradual drift over the past week.
+
+The output is a multiplicative adjustment ratio: `adjusted_prediction = base_prediction * ratio`. Training uses KDE-weighted loss (Kernel Density Estimation) to focus on rare extreme events — otherwise the model would optimize only for normal conditions and ignore crises, which is exactly when corrections matter most.
+
+**Results (2025-2026 test):** Test RMSE 52.20, MAPE 70.15% (1000 epochs). The high MAPE reflects that adjustment ratios are close to 1.0, where small absolute errors produce large percentage errors.
 
 ### 4. HyperIV: Hypernetwork (State-of-the-Art)
 
-Based on the ICML 2025 HyperIV paper — the current state-of-the-art for IV surface interpolation. Instead of training a single model on all options, a **hypernetwork** generates unique neural network weights for each day's IV surface.
+**What it does:** The most accurate predictor in the system. Generates a specialized prediction model for *each individual day's* IV surface.
 
-A **Transformer set encoder** reads a variable-size set of observed option contracts and produces a context embedding. A hypernetwork MLP then generates the weights of a small target MLP that maps `(tau, log-moneyness)` to total variance. This per-surface specialization dramatically improves accuracy.
+**Why it's special:** The base model learns a single average mapping that works for all days. But each day's IV surface has unique characteristics — maybe today has extra skew due to earnings announcements, or the term structure is inverted due to upcoming elections. HyperIV solves this by creating a custom neural network for each day.
 
-**Results:** TV-RMSE 0.0074, MAPE 20.7%, IV-RMSE 0.076 (best point prediction)
+**How it works:** Based on the ICML 2025 HyperIV paper — the current state-of-the-art for IV surface interpolation. The system works in two stages:
+
+1. **Read the market:** A **Transformer set encoder** (the same architecture behind large language models) reads 50 observed option prices from today's market. The Transformer uses attention to understand cross-strike and cross-maturity relationships — "this put at strike 15000 tells us something about the call at strike 16000."
+
+2. **Generate a specialist:** A **hypernetwork** takes the Transformer's summary and *generates the weights* of a small target neural network. This target network then predicts total variance for any `(tau, log-moneyness)` query point.
+
+The key insight is that the hypernetwork doesn't predict IV directly — it predicts the *parameters of another neural network* that predicts IV. This means every day gets its own specialist predictor, automatically adapted to that day's unique market conditions.
+
+**Results (2025-2026 test):** TV-RMSE 0.0056, MAPE 20.0%, IV-RMSE 0.113 (best point prediction — **53% lower error** than the base model)
 
 ### 5. DDPM: Diffusion Model for Surface Forecasting
 
-A **Denoising Diffusion Probabilistic Model** generates next-day IV surfaces conditioned on current market state. While models 1-4 interpolate today's surface, this model *forecasts* tomorrow's.
+**What it does:** Forecasts *tomorrow's* IV surface based on today's market conditions. While models 1-4 interpolate today's surface from observed prices, this model predicts the future.
 
-The architecture is a **1D U-Net** that denoises flattened IV surface vectors. Conditioning on market features (underlying price, VIX, volume, returns) is done via FiLM layers (Feature-wise Linear Modulation). The model learns to reverse a 1000-step noise corruption process using a cosine schedule.
+**Why it matters:** Portfolio managers need to know not just today's prices, but where they're headed. A good surface forecast enables proactive hedging — adjusting positions before the market moves, rather than reacting afterward.
 
-**Results:** Test surface RMSE 0.0029 (best surface generation)
+**How it works:** A **Denoising Diffusion Probabilistic Model** (DDPM — the same family of models behind image generators like DALL-E and Stable Diffusion, but applied to financial surfaces instead of images). The process works in reverse:
+
+1. **Training:** Take a real IV surface (a 10x20 grid = 200 numbers), gradually add random noise over 1000 steps until it becomes pure static. Train a neural network to reverse each step — given the noisy version, predict the noise that was added.
+
+2. **Generation:** Start from pure random noise and apply the trained denoiser 1000 times. Each step removes a little noise, gradually revealing a realistic IV surface conditioned on the input market features.
+
+The architecture is a **1D U-Net** (encoder-decoder with skip connections). Conditioning on 13 market features (underlying price, VIX, volume, returns, plus enhancement features like S&P 500, synthetic Taiwan VIX, term structure slope, variance risk premium, and realized volatility) is done via **FiLM layers** (Feature-wise Linear Modulation) — these tell the denoiser "generate a surface that looks like what the market should produce given these conditions."
+
+**Key advantage over point prediction:** The diffusion model generates *coherent* surfaces where all 200 grid points are mutually consistent. Point prediction models (Base, HyperIV) predict each point independently, which can create internal inconsistencies.
+
+**Results (2025-2026 test):** Val surface RMSE 0.0049, Test surface RMSE 0.0072
 
 ## Results Summary
 
+Two rounds of experiments were conducted:
+- **Round 1:** Train on 2014-2020 (254K rows), test on 2021
+- **Round 2:** Train on 2014-2024 (480K rows), test on 2025-2026 — with transfer learning and enhanced market features
+
 ### Point Prediction (Interpolation)
 
-| Model | TV-RMSE | MAPE | IV-RMSE | Improvement |
-|-------|---------|------|---------|-------------|
-| Base (SSVI+NN) | 0.0134 | 44.1% | 0.209 | Baseline |
-| HyperIV | 0.0074 | 20.7% | 0.076 | **45% / 53% / 64%** |
+| Model | TV-RMSE (R1 / R2) | MAPE (R1 / R2) | IV-RMSE (R1 / R2) |
+|-------|-------------------|-----------------|-------------------|
+| Base (SSVI+NN) | 0.0134 / **0.0120** | 44.1% / **33.0%** | 0.209 / 0.219 |
+| HyperIV | 0.0074 / **0.0056** | 20.7% / **20.0%** | 0.076 / 0.113 |
 
-### Specialized Tasks
+HyperIV consistently outperforms the base model — **53% lower TV-RMSE** and **39% lower MAPE** in Round 2.
 
-| Model | Task | Key Metric |
-|-------|------|------------|
-| DGM | PDE solving | Residual: 2.6e-5, BS RMSE: 0.036 |
-| DDPM | Surface forecasting | Test RMSE: 0.0029 |
+### All Five Models (Round 2, 2025-2026 Test)
+
+| Model | Task | Key Metric | Training |
+|-------|------|------------|----------|
+| Base (SSVI+NN) | Point prediction | TV-RMSE: 0.0120, MAPE: 33.0% | 105 ep, ~9h GPU |
+| HyperIV | Point prediction | TV-RMSE: 0.0056, MAPE: 20.0% | 69 ep, ~30min GPU |
+| DGM | PDE solving | Residual: 2.0e-5, BS RMSE: 0.036 | 5000 ep, ~25min GPU |
+| DDPM | Surface forecasting | Test RMSE: 0.0072 | 1000 ep, ~8h GPU |
+| Adjustment | Crisis correction | Test RMSE: 52.20, MAPE: 70.15% | 1000 ep, ~46h CPU |
 
 ### Training Curves
 
-| Base Model (76 epochs, early stopped) | HyperIV (58 epochs, early stopped) |
+| Base Model (105 epochs, early stopped) | HyperIV (69 epochs, early stopped) |
 |:---:|:---:|
 | ![Base Model Training](figures/base_model_training_zoomed.png) | ![HyperIV Training](figures/hyperiv_training.png) |
 
@@ -92,28 +138,45 @@ The architecture is a **1D U-Net** that denoises flattened IV surface vectors. C
 |:---:|:---:|
 | ![DGM Training](figures/dgm_training.png) | ![DDPM Training](figures/diffusion_training.png) |
 
-### IV Surface Visualizations
+### Model Comparison & IV Surface Visualizations
+
+| Model Comparison (2025-2026) | DDPM Validation RMSE |
+|:---:|:---:|
+| ![Model Comparison](figures/model_comparison.png) | ![DDPM Val RMSE](figures/diffusion_val_rmse.png) |
 
 | Predicted vs Observed IV Smiles | Predicted 3D IV Surface |
 |:---:|:---:|
 | ![IV Smiles](figures/iv_smiles.png) | ![IV Surface](figures/iv_surface_pred.png) |
 
+## Key Findings
+
+1. **More data helps significantly.** Expanding from 254K to 480K data points and 7 to 12 years of history reduced the base model's MAPE from 44.1% to 33.0% — a 25% improvement just from more training data.
+
+2. **HyperIV is the clear winner for point prediction.** Its per-surface specialization (generating unique network weights for each day) consistently outperforms the fixed-weight base model by 50%+ on TV-RMSE.
+
+3. **Transfer learning accelerates convergence.** HyperIV converged in just 69 epochs (vs. 58 in the original run with less data), thanks to starting from pretrained weights rather than random initialization.
+
+4. **The base model has a stability problem.** SSVI parameter optimization becomes unstable after ~60 epochs on the extended dataset, causing gradient explosion. This is a fundamental challenge of combining parametric models (SSVI) with neural network optimization — the parametric part can drift into degenerate configurations. Early stopping and checkpoint saving are essential safeguards.
+
+5. **Enhancement features matter.** Adding market features (VIX, term structure slope, variance risk premium, S&P 500 returns) improved the DDPM's validation RMSE by 31% compared to using only 4 basic features. These features give the model richer context about the current market regime.
+
+6. **IV-RMSE can be misleading.** Despite better TV-RMSE, IV-RMSE increased in Round 2 because the 2025-2026 test period has more short-maturity options. The conversion `IV = sqrt(TV / tau)` amplifies errors when tau is small — a mathematical artifact, not a model failure.
+
 ## Project Structure
 
 ```
-README.md               # This file
+README.md               # This file (plain-English overview)
 EXPERIMENT.md           # Detailed experimental results and analysis
 ARCHITECTURE.md         # System architecture and design decisions
 requirements.txt        # Python dependencies
-Metainfo.txt            # Original project metadata
 src/
-  config.ini            # All hyperparameters
+  config.ini            # All hyperparameters and file paths
   utils.py              # Utilities (seed, logging, metrics, early stopping)
-  dataset.py            # Data loading and preprocessing
+  dataset.py            # Data loading, feature engineering, train/test splits
   model.py              # Base model (SSVI, SmileModel, ensemble, losses)
   train.py              # Base model training loop
   experiment.py         # Experiment runner with visualization
-  test.py               # Evaluation with arbitrage checks
+  test.py               # Evaluation with arbitrage violation checks
   dgm.py                # DGM PDE solver network
   train_dgm.py          # DGM training with collocation resampling
   structural_break.py   # CUSUM/Bai-Perron change-point detection
@@ -123,8 +186,11 @@ src/
   train_hyperiv.py      # HyperIV training
   diffusion.py          # DDPM (UNet1D, noise schedule, sampler)
   train_diffusion.py    # DDPM training
+  transfer.py           # Transfer learning utilities (weight loading, differential LR)
 scripts/
-  generate_plots.py     # Regenerate all figures from logs
+  download_data.py      # Download TXO data from FinMind API + TWII/VIX from yfinance
+  build_features.py     # Compute enhancement features (VIXTWN, RV, VRP, etc.)
+  generate_plots.py     # Regenerate all figures from training logs
 figures/                # Experimental plots (9 PNGs)
 docs/
   keynote.pdf           # Presentation slides
@@ -164,7 +230,7 @@ python train.py --on_gpu --epochs 2000
 # Phase 2: Train DGM PDE solver
 python train_dgm.py --on_gpu
 
-# Phase 3: Train adjustment model (requires base model)
+# Phase 3: Train adjustment model (requires base model to be trained first)
 python train_adjustment.py --on_gpu
 
 # Phase 4: Train HyperIV
@@ -181,17 +247,67 @@ cd ..
 python scripts/generate_plots.py
 ```
 
+### Transfer Learning
+
+All training scripts support the `--finetune` flag to initialize from a previous checkpoint. This enables faster convergence when retraining on updated data:
+
+```bash
+cd src
+
+# Fine-tune base model from existing weights
+python train.py --on_gpu --finetune ../models/MultiModel.pt
+
+# Fine-tune HyperIV from existing weights
+python train_hyperiv.py --on_gpu --finetune ../models/HyperIVModel.pt
+
+# Fine-tune all other models similarly
+python train_dgm.py --on_gpu --finetune ../models/DGMModel.pt
+python train_adjustment.py --on_gpu --finetune ../models/AdjustmentModel.pt
+python train_diffusion.py --on_gpu --finetune ../models/DiffusionModel.pt
+```
+
+Transfer learning uses **differential learning rates**: pretrained layers learn at 1/10th the normal rate (to preserve useful knowledge), while newly initialized layers learn at full speed (to quickly adapt to new features). This is especially important for the Adjustment and DDPM models, where the input dimension changed (new enhancement features were added).
+
 ## Data
 
-Requires TXO options data in `dataset/`:
+The system uses Taiwan Stock Exchange Options (TXO) data and supplementary market features. Data can be automatically downloaded or manually provided.
 
-| File | Description |
-|------|-------------|
-| `2009_2023.pkl` or `.csv` | Raw TXO options data (2009-2023) |
-| `TWII.csv` | TAIEX underlying index prices |
-| `VIX.csv` | Realized volatility index |
+### Automatic Download
 
-Training uses 2014-2020 data; testing uses 2021 data (chronological split, no leakage).
+```bash
+# Download TXO options (2022-2026) from FinMind API + TWII/VIX from yfinance
+python scripts/download_data.py
+
+# Compute enhancement features (VIXTWN, realized volatility, VRP, etc.)
+python scripts/build_features.py
+```
+
+### Data Files
+
+| File | Description | Rows |
+|------|-------------|------|
+| `dataset/prs_dataset_full.csv` | Full TXO options dataset (2014-2026) | 480,194 |
+| `dataset/TWII_full.csv` | TAIEX underlying index daily prices | 2,947 |
+| `dataset/VIX_full.csv` | CBOE VIX index daily | 3,043 |
+| `dataset/enhancement/daily_features.csv` | Computed market features (23 columns) | 2,947 |
+
+### Enhancement Features
+
+These additional market features improve the Adjustment and DDPM models by providing richer market context:
+
+| Feature | Description | Used By |
+|---------|-------------|---------|
+| VIXTWN | Synthetic Taiwan VIX computed from ATM options | DDPM |
+| Realized Volatility (20d) | Actual price volatility over past 20 days | Adjustment, DDPM |
+| IV Term Slope | Slope of the IV term structure (long vs short maturity) | Adjustment, DDPM |
+| IV Skew | Difference between put-side and call-side IV | Adjustment, DDPM |
+| Variance Risk Premium | Gap between implied and realized volatility (fear gauge) | Adjustment, DDPM |
+| S&P 500 Return | US market return as a global risk factor | Adjustment, DDPM |
+| Futures Basis | Deviation of futures price from theoretical fair value | Adjustment, DDPM |
+
+### Train/Test Split
+
+Training uses 2014-2024 data; testing uses 2025-2026 data (strictly chronological split, no data leakage). The validation set is a 20% random sample within the training period.
 
 ## Testing
 

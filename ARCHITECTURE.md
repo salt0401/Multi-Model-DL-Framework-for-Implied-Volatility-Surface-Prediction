@@ -3,28 +3,32 @@
 ## Pipeline Overview
 
 ```
-                              Raw TXO Data
-                                  |
-                           DataProcessor
-                          /      |       \
-                    Train      Val       Test
-                   (2014-20)  (20%)    (2021)
-                      |
-      +---------------+---------------+---------------+
-      |               |               |               |
-  Phase 1         Phase 2         Phase 3         Phase 4/5
-  Base Model      DGM PDE         Adjustment      HyperIV / DDPM
-  (SSVI+NN)       Solver          (GRU+Attn)      (independent)
-      |               |               |               |
-  MultiModel.pt   DGMModel.pt   AdjModel.pt     HyperIV.pt / Diffusion.pt
-      |               |               |               |
-      +-------+-------+-------+-------+               |
-              |                                        |
-         test.py                              train_hyperiv.py
-         experiment.py                        train_diffusion.py
-              |                                        |
-      IV Surface Predictions                  Surface Forecasts
+                         Raw TXO Data (FinMind API + historical CSV)
+                         + Enhancement Features (VIX, S&P, institutional)
+                                        |
+                                 DataProcessor
+                                /      |       \
+                          Train      Val       Test
+                       (2014-2024)  (20%)    (2025-2026)
+                            |
+        +------------------+------------------+------------------+
+        |                  |                  |                  |
+    Phase 1            Phase 2            Phase 3           Phase 4/5
+    Base Model         DGM PDE           Adjustment         HyperIV / DDPM
+    (SSVI+NN)          Solver            (GRU+Attn)         (independent)
+        |                  |                  |                  |
+    MultiModel.pt      DGMModel.pt      AdjModel.pt      HyperIV.pt / Diffusion.pt
+        |                  |                  |                  |
+        +--------+---------+--------+--------+                  |
+                 |                                               |
+            test.py                                   train_hyperiv.py
+            experiment.py                             train_diffusion.py
+                 |                                               |
+         IV Surface Predictions                       Surface Forecasts
 ```
+
+All training scripts support `--finetune <path>` for transfer learning from existing checkpoints.
+`src/transfer.py` handles weight loading with dimension mismatch support and differential learning rates.
 
 ## Data Pipeline
 
@@ -33,11 +37,13 @@
 Handles all data loading, feature engineering, and splitting:
 
 ```
-Raw CSV/PKL (2009-2023 TXO options)
+Raw CSV (prs_dataset_full.csv, 480K rows, 2014-2026)
+  Sources: original 2014-2021 CSV + FinMind API (2022-2026)
+  Created by: scripts/download_data.py
     |
     v
 Column Handling
-    - Rename Chinese columns to English
+    - Rename Chinese columns to English (交易日期→date, 履約價→strike_price, etc.)
     - Parse dates, compute tau (time-to-expiry)
     - Filter: remove deep OTM/ITM, very short tau
     |
@@ -50,14 +56,24 @@ Feature Engineering
     - Season/year dummies for structural break features
     |
     v
+Enhancement Features (dataset/enhancement/daily_features.csv)
+    Created by: scripts/build_features.py
+    - VIXTWN (synthetic Taiwan VIX from ATM options)
+    - Realized volatility (20-day)
+    - IV term slope, IV skew
+    - Variance risk premium (VRP)
+    - S&P 500 return, futures basis %
+    - Institutional net buy/sell ratio
+    |
+    v
 Beta-Tau Estimation
     - Linear regression of SSVI betas on tau
     - Merge beta predictions back into main dataset
     |
     v
 Chronological Split (no leakage)
-    - Train: 2014-01-01 to 2020-12-31
-    - Test:  2021-01-01 to 2021-12-31
+    - Train: 2014-01-01 to 2024-12-31
+    - Test:  2025-01-01 to 2026-12-31
     - Val:   20% random split of train (within-period)
     |
     v
@@ -166,7 +182,7 @@ Collocation points are re-sampled every 100 epochs via `DGMSampler`.
 
 ```
    Sequence of daily IV features
-   (batch, seq_len=20, features)
+   (batch, seq_len=20, 13 features)
               |
          GRU (2 layers, 64 hidden)
               |
@@ -185,6 +201,12 @@ Collocation points are re-sampled every 100 epochs via `DGMSampler`.
               |
     Adjustment ratio or residual
 ```
+
+**Input features (13 dims):**
+- Base (6): vix_change, underlying_return, logm, tau, tv_pred, itm_otm
+- Enhancement (7): sp500_return, vixtwn_change, iv_term_slope, iv_skew, vrp_20d, futures_basis_pct, rv_20d
+
+**Data preparation:** The `tv_pred` feature is computed by running the trained base model on all data points. Since `SmileModel.forward()` uses `autograd.grad(create_graph=True)` for second-order derivatives, this consumes significant memory. The implementation uses **chunked inference** (5000 rows per batch) to avoid GPU OOM.
 
 **Three prediction modes:**
 1. `ratio` — multiplicative: `adjusted_IV = base_IV * ratio`
@@ -229,7 +251,7 @@ Collocation points are re-sampled every 100 epochs via `DGMSampler`.
 
 ```
    Current surface + noise          Market conditions
-   x_t (batch, 1, 200)             (batch, 4)
+   x_t (batch, 1, 200)             (batch, 13)
          |                              |
    1D U-Net                        FiLM conditioning
    Encoder:                        (gamma * feature + beta)
@@ -260,6 +282,34 @@ Collocation points are re-sampled every 100 epochs via `DGMSampler`.
 **Noise schedule:** Cosine schedule (`beta_t = 1 - alpha_bar_t / alpha_bar_{t-1}`), 1000 timesteps.
 
 **FiLM conditioning:** Each U-Net block receives `condition = time_embed + market_features` and applies Feature-wise Linear Modulation: `gamma * x + beta` where gamma and beta are projected from the condition vector.
+
+**Condition features (13 dims):** Base 4 (underlying price, VIX, volume, returns) + 9 enhancement features (S&P 500 return, VIXTWN, VIXTWN change, IV term slope, IV skew, VRP, futures basis, realized vol, institutional net ratio).
+
+## Transfer Learning (`transfer.py`)
+
+All five training scripts support `--finetune <path>` to initialize from a pretrained checkpoint. This is implemented in `src/transfer.py` with three utilities:
+
+### `load_finetune_weights(model, checkpoint_path, device)`
+- Loads state dict from checkpoint
+- For matching-shape parameters: copies weights directly
+- For dimension-mismatched parameters (e.g., GRU input 6→13): initializes with Xavier uniform, then copies overlapping weights from the pretrained model
+- Returns `(transferred_params, reinitialized_params)` name sets
+
+### `setup_finetune_optimizer(model, transferred, reinitialized, base_lr, new_lr)`
+- Creates optimizer with **differential learning rates**:
+  - Pretrained (transferred) layers: `base_lr` (typically lr × 0.1)
+  - New/reinitialized layers: `new_lr` (full learning rate)
+- This prevents catastrophic forgetting of pretrained features while allowing new dimensions to learn quickly
+
+### `freeze_transferred(model, transferred_names)`
+- Optional: completely freezes pretrained parameters (sets `requires_grad=False`)
+- Not used in current training but available for fine-tuning experiments
+
+### Dimension Mismatch Handling
+When the model architecture changes (e.g., adding enhancement features), layers that change size are handled gracefully:
+- The overlapping portion of weights is copied from the pretrained model
+- New dimensions are initialized with Xavier uniform random values
+- This allows models to benefit from prior training even when input/output dimensions change
 
 ## Testing Strategy
 
@@ -302,3 +352,44 @@ test_train_integration.py  10 tests   End-to-end training loops
 - **Bug regressions** — specific bug fixes are locked in with dedicated tests
 - **Training loop** — `train_one_epoch` and `validate` functions produce decreasing loss
 - **Data pipeline** — chronological splitting, no label leakage, correct feature engineering
+
+## Training Performance Summary
+
+Results from the extended dataset experiment (train 2014-2024, test 2025-2026, transfer learning from Round 1 checkpoints). See `EXPERIMENT.md` Section 6 for full details.
+
+| Model | Epochs | Key Test Metric | Training Time | Device |
+|-------|--------|----------------|---------------|--------|
+| Base (SSVI+NN) | 105/2000 | TV-RMSE 0.0120, MAPE 33.0% | ~9h | GPU |
+| HyperIV | 69/500 | TV-RMSE 0.0056, MAPE 20.0% | ~30min | GPU |
+| DGM | 5000/5000 | PDE residual 2.0e-5 | ~25min | GPU |
+| DDPM | 1000/1000 | Surface RMSE 0.0072 (test) | ~8h | GPU |
+| Adjustment | 1000/1000 | RMSE 52.20, MAPE 70.15% | ~46h | CPU |
+
+### Known Issues
+- **Base model gradient explosion:** SSVI parameter optimization becomes unstable after ~60 epochs on extended data. Best model is saved before instability. Aggressive early stopping (patience=50) is recommended.
+- **Adjustment GPU OOM:** Data preparation runs base model autograd on all 463K rows. Now mitigated with chunked inference (5000 rows/batch) in `dataset.py:prepare_adjustment_data()`.
+
+## File Index
+
+| File | Purpose |
+|------|---------|
+| `src/config.ini` | All hyperparameters, paths, data splits |
+| `src/model.py` | SmileModel, SingleModel, MultiModel, SoftmaxModel, losses |
+| `src/dataset.py` | DataProcessor: loading, features, splits, loaders |
+| `src/train.py` | Base model training loop |
+| `src/experiment.py` | Base model evaluation + plots |
+| `src/test.py` | Base model evaluation + arbitrage violation checks |
+| `src/dgm.py` | DGM PDE solver model + sampler |
+| `src/train_dgm.py` | DGM training script |
+| `src/adjustment.py` | AdjustmentModel (GRU+Attention) |
+| `src/train_adjustment.py` | Adjustment training script |
+| `src/hyperiv.py` | HyperIV (Transformer + Hypernetwork) |
+| `src/train_hyperiv.py` | HyperIV training script |
+| `src/diffusion.py` | DDPM (1D U-Net + FiLM conditioning) |
+| `src/train_diffusion.py` | DDPM training script |
+| `src/transfer.py` | Transfer learning utilities |
+| `src/structural_break.py` | Change-point detection (PELT algorithm) |
+| `src/utils.py` | Config loading, metrics, early stopping, seed |
+| `scripts/download_data.py` | Data download pipeline (FinMind + yfinance) |
+| `scripts/build_features.py` | Enhancement feature computation |
+| `scripts/generate_plots.py` | Figure generation from training logs |

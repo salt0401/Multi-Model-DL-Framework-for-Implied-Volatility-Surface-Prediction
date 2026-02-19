@@ -329,6 +329,24 @@ class DataProcessor():
         vix['vix_change'] = vix['Close'].pct_change()
         return vix
 
+    def load_enhancement_features(self):
+        """Load daily enhancement features if available.
+
+        Returns DataFrame with date-indexed features from
+        dataset/enhancement/daily_features.csv, or None if not found.
+
+        Features include: rv_5d..rv_60d, sp500_return, us10y_yield, usdtwd,
+        vixtwn, vixtwn_change, atm_iv, iv_term_slope, iv_skew,
+        inst_net_ratio, put_call_oi_ratio, futures_basis_pct, vrp_20d, etc.
+        """
+        enhance_path = os.path.join(self.folder, 'enhancement', 'daily_features.csv')
+        if not os.path.exists(enhance_path):
+            return None
+        df = pd.read_csv(enhance_path, parse_dates=['date'])
+        df = df.sort_values('date')
+        print(f'  Loaded enhancement features: {len(df)} rows, {len(df.columns)-1} features')
+        return df
+
     def prepare_adjustment_data(self, base_model, device, sequence_length=20):
         """Prepare time-series sequences for the adjustment model.
 
@@ -352,20 +370,48 @@ class DataProcessor():
         df = pd.merge(df, daily_underlying[['date', 'underlying_return']], on='date', how='left')
         df = pd.merge(df, vix[['date', 'vix_change']], on='date', how='left')
 
-        # Compute model predictions
-        # Note: SmileModel.forward uses autograd.grad internally, cannot use torch.no_grad()
+        # Merge enhancement features if available
+        enhance = self.load_enhancement_features()
+        if enhance is not None:
+            enhance_cols = ['sp500_return', 'vixtwn_change', 'iv_term_slope',
+                            'iv_skew', 'vrp_20d', 'futures_basis_pct', 'rv_20d']
+            avail_cols = [c for c in enhance_cols if c in enhance.columns]
+            if avail_cols:
+                df = pd.merge(df, enhance[['date'] + avail_cols], on='date', how='left')
+                for c in avail_cols:
+                    df[c] = df[c].fillna(0.0)
+
+        # Compute model predictions in chunks to avoid GPU OOM.
+        # SmileModel.forward uses autograd.grad(create_graph=True) for second-order
+        # derivatives, which stores 3 layers of computation graphs simultaneously.
+        # Processing all rows at once exhausts GPU memory; chunking fixes this.
         base_model.eval()
-        tau_t = from_numpy(df[['tau']].to_numpy(dtype='float64')).to(device)
-        logm_t = from_numpy(df[['logm']].to_numpy(dtype='float64')).to(device)
-        yatm_t = from_numpy(df[['y_atm']].to_numpy(dtype='float64')).to(device)
-        tv_pred, _, _, _ = base_model(tau_t, logm_t, yatm_t)
-        df['tv_pred'] = tv_pred.detach().cpu().numpy().flatten()
+        chunk_size = 5000
+        tau_np = df[['tau']].to_numpy(dtype='float64')
+        logm_np = df[['logm']].to_numpy(dtype='float64')
+        yatm_np = df[['y_atm']].to_numpy(dtype='float64')
+        n = len(df)
+        tv_pred_list = []
+        for start in range(0, n, chunk_size):
+            end = min(start + chunk_size, n)
+            tau_t = from_numpy(tau_np[start:end]).to(device)
+            logm_t = from_numpy(logm_np[start:end]).to(device)
+            yatm_t = from_numpy(yatm_np[start:end]).to(device)
+            pred, _, _, _ = base_model(tau_t, logm_t, yatm_t)
+            tv_pred_list.append(pred.detach().cpu().numpy().flatten())
+        df['tv_pred'] = np.concatenate(tv_pred_list)
 
         df['itm_otm'] = (df['logm'] > 0).astype(float)
         df['tv_ratio'] = df['total_var'] / (df['tv_pred'] + 1e-8)
 
         # Build sequences per option (grouped by strike + expiry)
+        # Base features + enhancement features if available
         features_cols = ['vix_change', 'underlying_return', 'logm', 'tau', 'tv_pred', 'itm_otm']
+        if enhance is not None:
+            avail_cols = [c for c in ['sp500_return', 'vixtwn_change', 'iv_term_slope',
+                                       'iv_skew', 'vrp_20d', 'futures_basis_pct', 'rv_20d']
+                          if c in df.columns]
+            features_cols = features_cols + avail_cols
         target_col = 'tv_ratio'
 
         df = df.dropna(subset=features_cols + [target_col])
@@ -485,6 +531,16 @@ class DataProcessor():
                              zip(daily_underlying['underlying_return'],
                                  daily_underlying['realized_vol_5d'])))
 
+        # Load enhancement features if available
+        enhance = self.load_enhancement_features()
+        if enhance is not None:
+            enhance_dict = {}
+            enhance_cols = [c for c in enhance.columns if c != 'date']
+            for _, row in enhance.iterrows():
+                enhance_dict[row['date']] = {c: row[c] for c in enhance_cols}
+        else:
+            enhance_dict = {}
+
         sorted_dates = sorted(daily_surfaces.keys())
 
         # Build consecutive pairs
@@ -511,9 +567,23 @@ class DataProcessor():
             if np.isnan(rvol) or rvol is None:
                 rvol = 0.01
 
+            # Base 4 features (always present for backward compatibility)
+            feats = [float(vix_val), float(vix_change), float(und_ret), float(rvol)]
+
+            # Append enhancement features if available
+            if enhance_dict:
+                enh = enhance_dict.get(d_today, {})
+                for col in ['sp500_return', 'vixtwn', 'vixtwn_change',
+                            'iv_term_slope', 'iv_skew', 'vrp_20d',
+                            'futures_basis_pct', 'rv_20d', 'inst_net_ratio']:
+                    val = enh.get(col, 0.0)
+                    if val is None or (isinstance(val, float) and np.isnan(val)):
+                        val = 0.0
+                    feats.append(float(val))
+
             surfaces_today.append(s_today)
             surfaces_tomorrow.append(s_tomorrow)
-            cond_features.append([float(vix_val), float(vix_change), float(und_ret), float(rvol)])
+            cond_features.append(feats)
 
         surfaces_today = np.array(surfaces_today, dtype='float64')
         surfaces_tomorrow = np.array(surfaces_tomorrow, dtype='float64')

@@ -106,6 +106,8 @@ def main():
     parser = ArgumentParser()
     parser.add_argument("--on_gpu", action='store_true')
     parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--finetune", type=str, default=None,
+                        help='Path to checkpoint for fine-tuning (transfer learning)')
     args = parser.parse_args()
 
     config = load_config('config.ini')
@@ -149,7 +151,16 @@ def main():
     model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num).to(device)
     # Bug T2 fixed: pass weights list instead of device
     loss_function = WeightedSumLoss(weights=loss_weights).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+
+    # Fine-tuning: load pretrained weights with differential LR
+    if args.finetune and os.path.exists(args.finetune):
+        from transfer import load_finetune_weights, setup_finetune_optimizer
+        logger.info(f'Fine-tuning from: {args.finetune}')
+        transferred, reinitialized = load_finetune_weights(model, args.finetune, device)
+        optimizer = setup_finetune_optimizer(model, transferred, reinitialized,
+                                             base_lr=learning_rate * 0.1, new_lr=learning_rate)
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
 
     epochs = args.epochs if args.epochs is not None else config['training'].getint('epochs')
     milestone_start = config['training'].getint('scheduler_milestones_start')

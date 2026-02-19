@@ -206,6 +206,8 @@ def main():
     parser = ArgumentParser()
     parser.add_argument("--on_gpu", action='store_true')
     parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--finetune", type=str, default=None,
+                        help='Path to checkpoint for fine-tuning (transfer learning)')
     args = parser.parse_args()
 
     config = load_config('config.ini')
@@ -265,7 +267,16 @@ def main():
     ).double().to(device)
 
     loss_fn = HyperIVLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
+
+    # Fine-tuning: load pretrained weights
+    if args.finetune and os.path.exists(args.finetune):
+        from transfer import load_finetune_weights, setup_finetune_optimizer
+        logger.info(f'Fine-tuning from: {args.finetune}')
+        transferred, reinitialized = load_finetune_weights(model, args.finetune, device)
+        optimizer = setup_finetune_optimizer(model, transferred, reinitialized,
+                                             base_lr=lr * 0.1, new_lr=lr)
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
     metrics = MetricsTracker()
