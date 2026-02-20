@@ -13,38 +13,6 @@
 - **Reasoning**: Gatheral & Jacquier (2014) no-butterfly-arbitrage condition requires `eta * (1 + |rho|) < 2`. Bounded parameterization prevents violation.
 - **Note**: The joint constraint `eta * (1 + |rho|) < 2` is not strictly enforced yet. Currently eta < 2 independently and rho < 0 independently. This is sufficient for now but could be tightened.
 
-### 1.5 config.ini dataset reversion (commit 262471d)
-- **Problem**: Commit `262471d` changed dataset from `prs_dataset_no_fat(clean)` to `prs_dataset_full` and shifted date ranges to 2022-2026, causing IV smile plots to look abnormal.
-- **Fix**: Reverted config.ini to original settings:
-  - `prs_dataset = prs_dataset_no_fat(clean)`
-  - `train_end_date = 20201231`
-  - `test_start_date = 20210101`, `test_end_date = 20211231`
-- **Note**: `condition_dim` remains at 13 (diffusion model setting, does not affect base model).
-
-### 1.6 Prediction zigzag pattern (was §3.1)
-- **Observation**: Predicted IV lines in regime-colored plots showed extreme zigzag/sawtooth patterns.
-- **Root cause**: **Plotting artifact**, not overfitting. The plotting scripts binned yATM into 3 coarse regime categories, then connected predictions sorted by logm as a line. Within each bin, yATM still varied significantly (e.g., 0.0003 to 0.003 in "Low Vol"), causing the model's correct yATM-dependent predictions to zigzag when connected.
-- **Verification** (`scripts/plot_smooth_iv_check.py`, 5 epochs):
-  1. **Fixed yATM synthetic test**: Locking yATM to exact values and sweeping logm produced smooth V-shaped curves — model learned a proper surface.
-  2. **Narrow yATM band test**: Filtering real data to tight yATM ranges dramatically reduced jaggedness.
-- **Conclusion**: The model correctly learns `f(tau, logm, yATM)` as a smooth 3D surface. Future plots must use fixed yATM values (one curve per yATM level) instead of mixing different yATM values in the same line.
-- **Deleted files**: Old zigzag plotting scripts (`plot_iv_smiles.py`, `plot_regime_predictions.py`) and all debug PNG images removed during 2026-02-20 cleanup.
-
----
-
-## 2. Explained Phenomena
-
-### 2.1 IV smile band structure (multiple parallel bands in observed data)
-- **Observation**: Validation data (2019.8 - 2020.12) shows 3-4 parallel bands of IV values at the same tau.
-- **Explanation**: These correspond to different volatility regimes within the validation period:
-  - Very Calm (2019.8-9): IV ~ 0.15
-  - Calm (2019.11-12): IV ~ 0.16
-  - Normal (2020.2-3 pre-COVID): IV ~ 0.19
-  - Elevated (2020.5-9 post-crash): IV ~ 0.27
-  - Crisis (2020.5 peak): IV ~ 0.28
-- **Conclusion**: This is normal market behavior, not a data quality issue. Per-date y_atm (fix 1.4) provides the model with regime information.
-- **Visualizations**: (debug images deleted 2026-02-20; regenerate with `scripts/plot_smooth_iv_check.py`)
-
 ---
 
 ## 3. Open / Unresolved Issues
@@ -71,19 +39,35 @@ The `prs_dataset_full` dataset extends from 2014-2021 to 2014-2026. The 2014-202
 - Ideal: `eta * (1 + |rho|) < 2` jointly enforced.
 - Status: Not yet implemented. Current bounds are sufficient in practice but not theoretically tight.
 
-### 3.5 Additive vs multiplicative architecture (pending decision)
-- **Current state**: `output = SSVI_prior(logm, yATM) + yATM * SmileNN(tau, logm)` (additive, in uncommitted changes).
-- **Original**: `output = SSVI_prior(logm, yATM) * SmileNN(tau, logm)` (multiplicative).
-- **Additive pros**: Derivatives have no cross-terms (simpler gradient flow for butterfly/calendar losses). yATM scaling keeps NN correction proportional to vol level. SSVI prior always present as baseline.
-- **Multiplicative pros**: NN can scale the entire SSVI shape (e.g., flatten or steepen). May better capture situations where the correction is proportional to SSVI output rather than yATM alone.
-- **Question**: With rho/eta/butterfly fixes already applied, is the multiplicative architecture now stable enough? Or does the additive form's simpler gradient flow provide meaningful training benefits?
-- **Status**: Pending user decision. Both architectures are valid; choice depends on empirical performance comparison.
+### ~~3.4 Adjustment model data leakage~~ → Resolved (2026-02-20)
+- **Problem**: `train_adjustment.py` used `torch.utils.data.random_split` for train/val split. This caused three types of temporal data leakage:
+  1. **Market feature leakage**: VIX/return info from future dates could appear in train while past dates were in val.
+  2. **Sequence overlap leakage**: Adjacent sliding windows share 19/20 days; random split puts near-identical sequences on both sides.
+  3. **Cross-option date leakage**: Different options from different dates randomly mixed across train/val.
+- **Fix (2 parts)**:
+  1. `dataset.py:prepare_adjustment_data` now returns per-sequence dates. `train_adjustment.py` splits chronologically (first 80% of dates → train, last 20% → val).
+  2. `adjustment.py:fit_kde_weights` now only fits KDE on train targets. Val weights are computed via `eval_kde_weights` using the train-fitted KDE, preventing val target distribution leakage.
+- **Files**: `src/dataset.py`, `src/train_adjustment.py`, `src/adjustment.py`
+- **Note**: Models 1 (SSVI+NN), 4 (HyperIV), 5 (DDPM) already used chronological split. Only Model 3 (Adjustment) had this bug.
 
-### 3.6 Model training duration
-- Only 10 epochs have been tested so far.
-- The model captures ~79% of regime spread at 10 epochs.
-- Longer training (50-100+ epochs) has not been tested after all the fixes.
-- Status: Pending user decision.
+### ~~3.5 Additive vs multiplicative architecture~~ → Resolved (2026-02-20)
+- **Decision**: **Additive architecture confirmed** via 8-epoch A/B experiment.
+- **Architecture**: `output = SSVI_prior(logm, yATM) + yATM * SmileNN(tau, logm)`
+- **Experiment** (`scripts/compare_architectures.py`, 8 epochs each, GPU, same seed):
+  - **Additive**: Stable convergence (train 0.080→0.069), zero butterfly violations, grad norm 0.05-0.13, smooth SSVI param trajectory.
+  - **Multiplicative**: Exploded at epoch 2 (train 0.105→0.816→14.8→96.8), massive butterfly violations (6.55), grad norm pinned at clip ceiling (1.0), SSVI params oscillating.
+- **Root cause of multiplicative instability**: Product-rule cross-terms in d²w/dk² (specifically `2·dSSVI/dk·dNN/dk`) create feedback loops between butterfly loss and SSVI parameters. Gradient clipping cannot prevent the underlying loss landscape from having sharp ridges.
+- **Full results**: `logs/architecture_comparison.json`
+
+### ~~3.6 Model training duration~~ → Resolved (2026-02-20)
+- **Conclusion**: Longer training is **not needed and counterproductive**.
+- **Evidence** (from 8-epoch A/B experiment, `logs/architecture_comparison.json`):
+  - Train loss convergence rate: -8.1% (ep1→2), -3.0% (ep2→3), -0.26% (ep5→6) — diminishing returns
+  - Val loss **increases** from epoch 1 (0.117) to epoch 8 (0.183) — overfitting
+  - Val/Train gap grows from 1.46x (ep1) to 2.64x (ep8)
+  - MAPE ~7% is the structural floor of the SSVI+NN additive architecture (MAPE accounts for 97% of the loss; constraints are ~0%)
+- **Root cause of rapid convergence**: SSVI prior provides ~97% of the loss structure. The NN correction, scaled by yATM (median ~0.005), is inherently small. The constraints are satisfied by the SSVI prior alone.
+- **Path to further improvement**: Not more epochs, but better models (HyperIV already achieves MAPE 20% on the full surface).
 
 ---
 
@@ -109,3 +93,6 @@ The `prs_dataset_full` dataset extends from 2014-2021 to 2014-2026. The 2014-202
 | 2026-02-20 | Deleted 9 debug PNG images from project root (zigzag investigation artifacts) |
 | 2026-02-20 | Deleted `scripts/plot_iv_smiles.py`, `scripts/plot_regime_predictions.py` (superseded by `plot_smooth_iv_check.py`) |
 | 2026-02-20 | Moved §3.1 zigzag issue to §1.6 Resolved |
+| 2026-02-20 | Resolved §3.5: Additive architecture confirmed via 8-epoch A/B experiment (multiplicative explodes at ep2) |
+| 2026-02-20 | Resolved §3.6: Longer training not needed (val loss overfits from ep1, MAPE 7% is structural floor) |
+| 2026-02-20 | Resolved §3.4: Fixed adjustment model data leakage (random_split → chronological, KDE fit train-only) |

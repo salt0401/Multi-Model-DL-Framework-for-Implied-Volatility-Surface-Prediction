@@ -192,7 +192,7 @@ class TestSingleModel:
         out, g1, g2, g3 = model(tau, logm, yATM)
         assert out.shape == (16, 1)
 
-    def test_product_rule_derivatives_exist(self, tiny_batch):
+    def test_additive_derivatives_exist(self, tiny_batch):
         tau, logm, yATM, _ = tiny_batch
         model = SingleModel(hidden_sizes=[5, 5, 5])
         out, g_tau, g_logm, g_logm2 = model(tau, logm, yATM)

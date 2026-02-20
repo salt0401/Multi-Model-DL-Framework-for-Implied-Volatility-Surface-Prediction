@@ -95,7 +95,7 @@ def main():
     dp()
 
     sequence_length = adj_cfg.getint('sequence_length')
-    sequences, targets, masks = dp.prepare_adjustment_data(base_model, device, sequence_length)
+    sequences, targets, masks, seq_dates = dp.prepare_adjustment_data(base_model, device, sequence_length)
 
     if sequences is None:
         logger.error('Failed to prepare adjustment data (VIX file missing?)')
@@ -103,25 +103,40 @@ def main():
 
     logger.info(f'Adjustment data shape: sequences={sequences.shape}, targets={targets.shape}')
 
-    # Step 4: Fit KDE weights
-    logger.info('Fitting KDE weights...')
+    # Step 4: Chronological split (must happen BEFORE KDE fitting to prevent leakage).
+    # Last 20% of dates as validation to prevent temporal data leakage
+    # (financial time series must not shuffle future into past).
+    unique_dates = np.sort(np.unique(seq_dates))
+    split_idx = int(len(unique_dates) * 0.8)
+    val_start_date = unique_dates[split_idx]
+
+    train_mask = seq_dates < val_start_date
+    val_mask = seq_dates >= val_start_date
+
+    logger.info(f'Chronological split: train dates < {val_start_date}, '
+                f'train={train_mask.sum()}, val={val_mask.sum()}')
+
+    # Step 5: Fit KDE on train targets only, then evaluate weights for both splits
+    logger.info('Fitting KDE weights (train-only)...')
     loss_fn = AdjustmentLoss(
         kde_bandwidth=adj_cfg.getfloat('kde_bandwidth'),
         mape_weight=0.5
     )
-    kde_weights = loss_fn.fit_kde_weights(targets.numpy())
+    train_kde_weights = loss_fn.fit_kde_weights(targets[train_mask].numpy())
+    val_kde_weights = loss_fn.eval_kde_weights(targets[val_mask].numpy())
 
-    # Step 5: Create DataLoader
+    # Step 6: Create DataLoader
     batch_size = adj_cfg.getint('batch_size')
-    weight_tensor = torch.tensor(kde_weights, dtype=torch.float64)
 
-    dataset = TensorDataset(sequences, targets, masks, weight_tensor)
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+    train_ds = TensorDataset(
+        sequences[train_mask], targets[train_mask], masks[train_mask],
+        torch.tensor(train_kde_weights, dtype=torch.float64))
+    val_ds = TensorDataset(
+        sequences[val_mask], targets[val_mask], masks[val_mask],
+        torch.tensor(val_kde_weights, dtype=torch.float64))
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
     # Step 6: Build model
     logger.info('Building adjustment model...')

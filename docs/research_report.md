@@ -28,7 +28,7 @@ This paper makes the following contributions:
 
 1. **Multi-model architecture.** We design and implement a five-model system where each model addresses a distinct aspect of IV surface prediction — interpolation, PDE consistency, crisis adaptation, per-surface specialization, and generative forecasting — rather than attempting to solve all problems with a single model.
 
-2. **Physics-informed base model.** We combine the SSVI parametric model with a neural network ensemble using a six-component loss function that jointly optimizes data fidelity, parametric prior adherence, calendar and butterfly arbitrage constraints, density smoothness, and wing behavior. The product-rule formulation preserves the parametric structure while allowing flexible nonlinear correction.
+2. **Physics-informed base model.** We combine the SSVI parametric model with a neural network ensemble using a six-component loss function that jointly optimizes data fidelity, parametric prior adherence, calendar and butterfly arbitrage constraints, density smoothness, and wing behavior. The additive formulation ($w = w_{\text{SSVI}} + \theta \cdot f_{\text{NN}}$) preserves the parametric structure as a baseline while allowing flexible nonlinear correction with simpler gradient flow than a multiplicative alternative.
 
 3. **HyperIV adaptation for TXO.** We adapt the state-of-the-art HyperIV architecture (ICML 2025) — which uses a Transformer set encoder and hypernetwork to generate per-surface specialized prediction networks — to the Taiwan options market, achieving a 53% reduction in TV-RMSE compared to the base model.
 
@@ -180,11 +180,11 @@ This chronological split is critical for financial time series — shuffled spli
 
 #### 4.1.1 Architecture
 
-The base model combines an SSVI parametric prior with a neural network ensemble via multiplicative composition. Each ensemble member $i$ consists of a `SingleModel`:
+The base model combines an SSVI parametric prior with a neural network ensemble via additive composition. Each ensemble member $i$ consists of a `SingleModel`:
 
-$$w_i(k, \tau, \theta) = w_{\text{SSVI}}(k, \theta) \cdot f_{\text{NN},i}(\tau, k)$$
+$$w_i(k, \tau, \theta) = w_{\text{SSVI}}(k, \theta) + \theta \cdot f_{\text{NN},i}(\tau, k)$$
 
-where $w_{\text{SSVI}}$ is the SSVI parametric prediction and $f_{\text{NN},i}$ is the $i$-th `SmileModel` neural network.
+where $w_{\text{SSVI}}$ is the SSVI parametric prediction, $f_{\text{NN},i}$ is the $i$-th `SmileModel` neural network, and $\theta$ is the ATM total variance (yATM). The $\theta$ scaling ensures the NN correction is proportional to the current volatility level. An earlier multiplicative formulation ($w_{\text{SSVI}} \cdot f_{\text{NN}}$) was abandoned after A/B testing showed it causes gradient explosion within 2 epochs due to product-rule cross-terms in the butterfly constraint derivatives (see `logs/architecture_comparison.json`).
 
 **SSVI component (`SSVIModel`):** Implements the SSVI formula with learnable parameters $\rho$ (constrained via $\tanh$ to $(-1,1)$), $\eta$ and $\gamma$ (constrained via $\exp$ to be positive). The power-law $\varphi$ function is used. Analytical first and second derivatives with respect to log-moneyness are computed in closed form for efficiency.
 
@@ -196,11 +196,13 @@ where $w_{\text{SSVI}}$ is the SSVI parametric prediction and $f_{\text{NN},i}$ 
 - **Output:** Scalar total variance prediction.
 - **Gradient computation:** First-order derivatives $\partial w/\partial \tau$ and $\partial w/\partial k$ are computed via `torch.autograd.grad` with `create_graph=True`; the second derivative $\partial^2 w/\partial k^2$ is computed via a second autograd call with `retain_graph=True` (without `create_graph` to avoid third-order gradient instability).
 
-**Product-rule derivatives:** For the composite model $w = w_{\text{SSVI}} \cdot f_{\text{NN}}$, derivatives are computed via the product rule:
+**Additive derivatives:** For the composite model $w = w_{\text{SSVI}} + \theta \cdot f_{\text{NN}}$, derivatives are computed by simple addition (no cross-terms):
 
-$$\frac{\partial w}{\partial k} = \frac{\partial w_{\text{SSVI}}}{\partial k} \cdot f_{\text{NN}} + w_{\text{SSVI}} \cdot \frac{\partial f_{\text{NN}}}{\partial k}$$
+$$\frac{\partial w}{\partial k} = \frac{\partial w_{\text{SSVI}}}{\partial k} + \theta \cdot \frac{\partial f_{\text{NN}}}{\partial k}$$
 
-$$\frac{\partial^2 w}{\partial k^2} = \frac{\partial^2 w_{\text{SSVI}}}{\partial k^2} \cdot f_{\text{NN}} + 2 \frac{\partial w_{\text{SSVI}}}{\partial k} \cdot \frac{\partial f_{\text{NN}}}{\partial k} + w_{\text{SSVI}} \cdot \frac{\partial^2 f_{\text{NN}}}{\partial k^2}$$
+$$\frac{\partial^2 w}{\partial k^2} = \frac{\partial^2 w_{\text{SSVI}}}{\partial k^2} + \theta \cdot \frac{\partial^2 f_{\text{NN}}}{\partial k^2}$$
+
+This is a key advantage over the multiplicative formulation, which would introduce cross-terms ($2 \cdot \partial w_{\text{SSVI}}/\partial k \cdot \partial f_{\text{NN}}/\partial k$) that create feedback loops between the SSVI and NN gradient paths, causing training instability.
 
 **Ensemble aggregation (`SoftmaxModel`):** Five `SingleModel` instances are trained with different random initializations. Their predictions are combined via learned softmax weights that depend on the input features $(\tau, k, \theta)$:
 
@@ -928,16 +930,16 @@ grad2 = torch.autograd.grad(grad1.sum(), logm_var, retain_graph=True)[0]
 
 The `create_graph=True` flag is essential: it instructs PyTorch to build a computational graph through the gradient computation itself, enabling the optimizer to backpropagate through the second derivative. Without this, the butterfly and density loss terms (which depend on `d²w/dk²`) would have zero gradients and provide no learning signal.
 
-**Product-rule derivative composition.** The `SingleModel` applies the chain rule to combine inner SmileModel derivatives with outer SSVI-based corrections:
+**Additive derivative composition.** The `SingleModel` combines SSVI and SmileModel derivatives via simple addition:
 
 ```python
-# y_tau_ssvi = ssvi_prior(logm, yATM)
-# h(k) = SmileModel(logm)
-# final prediction = y_tau_ssvi * h(k)
-# grad = d(y_tau * h)/dk = y_tau * h' + y_tau' * h (product rule)
+# w_ssvi = ssvi_prior(logm, yATM)
+# h(k) = SmileModel(tau, logm)
+# final prediction = w_ssvi + yATM * h(k)
+# grad = dw_ssvi/dk + yATM * dh/dk  (no cross-terms)
 ```
 
-This ensures that the ensemble output's derivatives are analytically correct with respect to the full composition, which is critical for the butterfly constraint `g(k) = (1 - kw'/2w)² - w'²/4(1/w + 1/4) + w''/2 ≥ 0`.
+The absence of cross-terms is critical for training stability: the butterfly constraint `g(k) = (1 - kw'/2w)² - w'²/4(1/w + 1/4) + w''/2 ≥ 0` depends on both first and second derivatives, and cross-terms in a multiplicative formulation create feedback loops that cause gradient explosion (verified by A/B experiment, see `logs/architecture_comparison.json`).
 
 **Float64 precision.** The entire system uses `torch.float64` (double precision) rather than the PyTorch default `float32`. This is set globally at test time via `conftest.py` and enforced in data loading via explicit dtype specification. Double precision is necessary because:
 - Total variance values near ATM are O(10⁻³), where float32 loses significant digits in difference operations
@@ -967,12 +969,12 @@ The project includes 215 unit tests across 10 test files, designed to run in und
 **Bug regression tests.** Eighteen tests in `test_model_regression.py` are named after specific bug IDs (e.g., `test_M1_float64_dtype`, `test_X2_multimodel_device_consistency`, `test_D3_dgm_gradient_flow`). Each test was written simultaneously with its bug fix to prevent future regressions. The naming convention provides a direct audit trail from test to the specific issue it guards against. Example:
 
 ```python
-def test_M3_product_rule_derivatives(tiny_batch, device):
-    """Bug M3: SingleModel gradient was missing product-rule term y_tau_ssvi * h'(k)."""
+def test_M3_additive_derivatives(tiny_batch, device):
+    """Bug M3: SingleModel gradient must flow through both SSVI and NN components."""
     model = SingleModel(hidden_sizes=[5, 5, 5], device=device)
     tau, logm, yATM, _ = tiny_batch
     tv, grad1, grad2, bs = model(tau, logm, yATM)
-    assert grad1.requires_grad  # must flow through product rule
+    assert grad1.requires_grad  # must flow through additive composition
     loss = grad1.sum()
     loss.backward()
     # Verify gradients propagate to both SmileModel and SSVI components

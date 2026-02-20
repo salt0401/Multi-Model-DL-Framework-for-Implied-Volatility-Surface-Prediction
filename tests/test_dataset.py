@@ -146,20 +146,21 @@ class TestPrepareAdjustmentData:
         base_model = _SimpleBaseModel()
         return dp, base_model
 
-    def test_returns_sequences_targets_masks(self, _adj_setup):
+    def test_returns_sequences_targets_masks_dates(self, _adj_setup):
         dp, base_model = _adj_setup
         result = dp.prepare_adjustment_data(base_model, torch.device('cpu'), sequence_length=3)
-        sequences, targets, masks = result
+        sequences, targets, masks, seq_dates = result
         if sequences is not None:
             assert sequences.ndim == 3  # (n, seq_len, features)
             assert targets.ndim == 2   # (n, 1)
             assert masks.ndim == 2     # (n, seq_len)
-            assert sequences.shape[0] == targets.shape[0] == masks.shape[0]
+            assert seq_dates.ndim == 1  # (n,)
+            assert sequences.shape[0] == targets.shape[0] == masks.shape[0] == len(seq_dates)
 
     def test_padding_zeros(self, _adj_setup):
         dp, base_model = _adj_setup
         result = dp.prepare_adjustment_data(base_model, torch.device('cpu'), sequence_length=5)
-        sequences, targets, masks = result
+        sequences, targets, masks, _ = result
         if sequences is not None and masks is not None:
             # Where mask is 0, sequence should be 0
             padded = (masks == 0)
@@ -170,10 +171,20 @@ class TestPrepareAdjustmentData:
     def test_mask_matches_padding(self, _adj_setup):
         dp, base_model = _adj_setup
         result = dp.prepare_adjustment_data(base_model, torch.device('cpu'), sequence_length=5)
-        sequences, targets, masks = result
+        sequences, targets, masks, _ = result
         if masks is not None:
             # Mask should be binary
             assert ((masks == 0) | (masks == 1)).all()
+
+    def test_dates_chronological_for_split(self, _adj_setup):
+        dp, base_model = _adj_setup
+        result = dp.prepare_adjustment_data(base_model, torch.device('cpu'), sequence_length=3)
+        sequences, targets, masks, seq_dates = result
+        if seq_dates is not None:
+            # Each date should come from the dataset
+            all_dates = set(dp.prs_dataset['date'].unique())
+            for d in seq_dates:
+                assert d in all_dates
 
 
 # ── getYATM ───────────────────────────────────────────────────────────

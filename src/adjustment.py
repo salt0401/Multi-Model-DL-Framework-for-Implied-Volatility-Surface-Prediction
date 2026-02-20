@@ -178,10 +178,11 @@ class AdjustmentLoss(nn.Module):
         self.sample_weights = None
 
     def fit_kde_weights(self, targets):
-        """Compute sample weights from KDE of target distribution.
+        """Fit KDE on target distribution and compute sample weights.
 
         Args:
-            targets: numpy array of target values
+            targets: numpy array of target values (should be train-only
+                     to avoid leaking val/test distribution info)
 
         Returns:
             numpy array of sample weights (higher for rare values)
@@ -194,10 +195,30 @@ class AdjustmentLoss(nn.Module):
         if len(targets_flat) > max_kde_samples:
             rng = np.random.RandomState(42)
             subsample_idx = rng.choice(len(targets_flat), max_kde_samples, replace=False)
-            kde = gaussian_kde(targets_flat[subsample_idx], bw_method=self.kde_bandwidth)
+            self._kde = gaussian_kde(targets_flat[subsample_idx], bw_method=self.kde_bandwidth)
         else:
-            kde = gaussian_kde(targets_flat, bw_method=self.kde_bandwidth)
-        density = kde(targets_flat)
+            self._kde = gaussian_kde(targets_flat, bw_method=self.kde_bandwidth)
+
+        return self._eval_kde(targets_flat)
+
+    def eval_kde_weights(self, targets):
+        """Compute sample weights using the already-fitted KDE.
+
+        Must call fit_kde_weights first.
+
+        Args:
+            targets: numpy array of target values to evaluate
+
+        Returns:
+            numpy array of sample weights
+        """
+        if not hasattr(self, '_kde') or self._kde is None:
+            raise RuntimeError('Must call fit_kde_weights before eval_kde_weights')
+        return self._eval_kde(targets.flatten())
+
+    def _eval_kde(self, targets_flat):
+        """Evaluate fitted KDE and return inverse-density weights."""
+        density = self._kde(targets_flat)
 
         # Inverse density weighting, capped to avoid extreme weights
         weights = 1.0 / (density + 1e-8)

@@ -463,11 +463,13 @@ class DataProcessor():
         sequences = []
         targets = []
         masks = []
+        seq_dates = []
 
         for _, group in df.groupby(['strike_price', 'exdate']):
             group = group.sort_values('date')
             feats = group[features_cols].values
             tgts = group[target_col].values
+            dates = group['date'].values
 
             for i in range(len(group)):
                 start = max(0, i - sequence_length + 1)
@@ -479,15 +481,18 @@ class DataProcessor():
                 sequences.append(seq)
                 targets.append(tgts[i])
                 masks.append(mask)
+                seq_dates.append(dates[i])
 
         sequences = np.array(sequences, dtype='float64')
         targets = np.array(targets, dtype='float64').reshape(-1, 1)
         masks = np.array(masks, dtype='float64')
+        seq_dates = np.array(seq_dates)
 
         return (
             torch.from_numpy(sequences),
             torch.from_numpy(targets),
             torch.from_numpy(masks),
+            seq_dates,
         )
 
     def Prepare_hyperiv_data(self):
