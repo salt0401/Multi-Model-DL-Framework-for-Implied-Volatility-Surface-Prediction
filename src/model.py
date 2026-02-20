@@ -20,23 +20,25 @@ class SSVIModel(nn.Module):
         self.device = device
         self.phi_fun = phi_fun
 
-        self.raw_rho = nn.Parameter(torch.tensor([0.5], dtype=torch.float64))
+        # rho = -sigmoid(raw_rho) ∈ (-1, 0): enforces negative skew for equity index
+        self.raw_rho = nn.Parameter(torch.tensor([0.0], dtype=torch.float64))
         if self.phi_fun == 'heston_like':
             self.raw_lambda = nn.Parameter(torch.tensor([0.0], dtype=torch.float64))
         elif self.phi_fun == 'power_law':
             self.raw_eta = nn.Parameter(torch.tensor([0.0], dtype=torch.float64))
             self.raw_gamma = nn.Parameter(torch.tensor([0.0], dtype=torch.float64))
-        self.tanh = nn.Tanh()
 
     def forward(self, logm, yATM):
-        rho = self.tanh(self.raw_rho)
+        rho = -torch.sigmoid(self.raw_rho)
 
         if self.phi_fun == 'heston_like':
             lambdaa = torch.exp(self.raw_lambda)
             phi = 1 / (lambdaa * yATM) * (1 - (1 - torch.exp(-lambdaa * yATM)) / (lambdaa * yATM))
         elif self.phi_fun == 'power_law':
-            eta = torch.exp(self.raw_eta)
-            gamma = torch.exp(self.raw_gamma)
+            # Gatheral & Jacquier (2014): eta*(1+|rho|) < 2 for no butterfly arbitrage.
+            # Bounded parameterization: eta ∈ (0, 2), gamma ∈ (0, 1).
+            eta = 2 * torch.sigmoid(self.raw_eta)
+            gamma = torch.sigmoid(self.raw_gamma)
             phi = eta / (torch.pow(yATM, gamma) * torch.pow(1 + yATM, 1 - gamma))
 
         # SSVI formula: w = theta/2 * (1 + rho*phi*k + sqrt((phi*k + rho)^2 + 1 - rho^2))
@@ -125,12 +127,14 @@ class SingleModel(nn.Module):
     def forward(self, tau, logm, yATM):
         output_Prior, grad_ttm1_prior, grad_logm1_prior, grad_logm2_prior = self.Prior(logm, yATM)
         output_NN, grad_ttm1_NN, grad_logm1_NN, grad_logm2_NN = self.NN(tau, logm)
-        output = output_Prior * output_NN
 
-        # Product rule for derivatives
-        grad_ttm1 = grad_ttm1_prior*output_NN + grad_ttm1_NN*output_Prior
-        grad_logm1 = grad_logm1_prior*output_NN + grad_logm1_NN*output_Prior
-        grad_logm2 = grad_logm2_prior*output_NN + grad_logm1_prior*grad_logm1_NN*2 + grad_logm2_NN*output_Prior
+        # Additive architecture: Prior + yATM * NN
+        # yATM scaling keeps NN correction proportional to vol level.
+        # No cross-terms in derivatives (unlike Prior * NN product rule).
+        output = output_Prior + yATM * output_NN
+        grad_ttm1 = grad_ttm1_prior + yATM * grad_ttm1_NN
+        grad_logm1 = grad_logm1_prior + yATM * grad_logm1_NN
+        grad_logm2 = grad_logm2_prior + yATM * grad_logm2_NN
         return output, grad_ttm1, grad_logm1, grad_logm2
 
 
@@ -270,8 +274,9 @@ class Loss_butterfly(nn.Module):
         super(Loss_butterfly, self).__init__()
 
     def forward(self, y_pred, logm, grad_logm, grad_logm_2nd):
-        g_k = (1-(logm * grad_logm)/(2*y_pred))**2 - grad_logm/4*(1/y_pred+0.25) + grad_logm_2nd/2
-        loss = torch.mean(torch.relu(g_k))
+        # Gatheral & Jacquier (2014) density condition: g(k) >= 0 for no butterfly arbitrage
+        g_k = (1-(logm * grad_logm)/(2*y_pred))**2 - grad_logm**2/4*(1/y_pred+0.25) + grad_logm_2nd/2
+        loss = torch.mean(torch.relu(-g_k))
         return loss
 
 

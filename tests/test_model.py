@@ -76,12 +76,31 @@ class TestSSVIModel:
         assert 'raw_lambda' in param_names
         assert 'raw_eta' not in param_names
 
+    def test_rho_initial_sign_negative(self):
+        """rho should initialize negative for equity index left-skew (fear premium)."""
+        model = SSVIModel()
+        rho = -torch.sigmoid(model.raw_rho)
+        assert rho.item() < 0, f"rho should be negative for equity index, got {rho.item():.4f}"
+
+    def test_left_skew_at_init(self):
+        """At initialization, OTM put (logm<0) should have higher TV than OTM call (logm>0)."""
+        model = SSVIModel()
+        yATM = torch.tensor([[0.05]], dtype=torch.float64)
+        logm_put = torch.tensor([[-0.3]], dtype=torch.float64)   # OTM put
+        logm_call = torch.tensor([[0.3]], dtype=torch.float64)   # OTM call
+        out_put, _, _, _ = model(logm_put, yATM)
+        out_call, _, _, _ = model(logm_call, yATM)
+        assert out_put.item() > out_call.item(), (
+            f"Left skew violated: OTM put TV ({out_put.item():.6f}) "
+            f"should exceed OTM call TV ({out_call.item():.6f})"
+        )
+
     def test_rho_bounded(self, tiny_batch):
         _, logm, yATM, _ = tiny_batch
         model = SSVIModel()
-        # rho = tanh(raw_rho) so should be in (-1, 1)
-        rho = model.tanh(model.raw_rho)
-        assert rho.item() > -1 and rho.item() < 1
+        # rho = -sigmoid(raw_rho) so should be in (-1, 0)
+        rho = -torch.sigmoid(model.raw_rho)
+        assert -1 < rho.item() < 0, f"rho should be in (-1, 0), got {rho.item():.4f}"
 
     def test_output_positive(self, tiny_batch):
         _, logm, yATM, _ = tiny_batch

@@ -232,24 +232,68 @@ class DataProcessor():
         return syn_c6
 
     def getYATM(self, train_end_date=None):
-        """Compute ATM total variance interpolation.
+        """Compute per-date ATM total variance interpolation.
 
-        If train_end_date is provided, fit the interpolant only on training data
-        (dates <= train_end_date) to avoid data leakage from test data.
+        For each date, finds the ATM option per tau (strike closest to
+        underlying) and builds a per-date interpolation curve tau -> total_var.
+        Each row gets y_atm from its own date's ATM term structure, preserving
+        volatility regime information (high y_atm during crashes, low in calm).
+
+        For synthetic data (no date column), uses the mean ATM curve across
+        training dates.  If train_end_date is provided, the synthetic curve
+        averages only over training dates to avoid data leakage.
         """
-        print('concating total variance when atm')
-        # Bug D4 fixed: use 'underlying' not 'S'
+        print('Computing per-date ATM total variance')
+
+        # Step 1: Find ATM row for each (date, tau)
+        atm_idxs = self.prs_dataset.groupby(['date', 'tau']).apply(
+            lambda x: (x['underlying'] - x['strike_price']).abs().idxmin()
+        )
+        atm_rows = self.prs_dataset.loc[atm_idxs][['date', 'tau', 'total_var']]
+        print(f'  {len(atm_rows)} ATM points across {atm_rows["date"].nunique()} dates')
+
+        # Step 2: Build per-date interpolation functions
+        interp_dict = {}
+        for date, grp in atm_rows.groupby('date'):
+            grp_sorted = grp.sort_values('tau')
+            taus = grp_sorted['tau'].values
+            tvs = grp_sorted['total_var'].values
+            if len(taus) >= 2:
+                interp_dict[date] = interp1d(
+                    taus, tvs, kind='linear',
+                    fill_value='extrapolate', bounds_error=False
+                )
+            else:
+                val = tvs[0]
+                interp_dict[date] = lambda tau, v=val: np.full_like(
+                    np.asarray(tau, dtype=np.float64), v
+                )
+
+        # Step 3: Assign y_atm per row using its own date's ATM curve
+        chunks = []
+        for date, group in self.prs_dataset.groupby('date'):
+            fn = interp_dict[date]
+            vals = fn(group['tau'].values)
+            chunks.append(pd.Series(vals, index=group.index))
+        self.prs_dataset['y_atm'] = pd.concat(chunks)
+        self.prs_dataset['y_atm'] = self.prs_dataset['y_atm'].clip(lower=1e-8)
+
+        # Step 4: Mean ATM curve for synthetic data
         if train_end_date is not None:
-            fit_data = self.prs_dataset[self.prs_dataset['date'] <= train_end_date]
+            train_atm = atm_rows[atm_rows['date'] <= train_end_date]
         else:
-            fit_data = self.prs_dataset
+            train_atm = atm_rows
+        mean_atm = train_atm.groupby('tau')['total_var'].mean().reset_index()
+        mean_atm = mean_atm.sort_values('tau')
+        syn_fn = interp1d(
+            mean_atm['tau'].values, mean_atm['total_var'].values,
+            kind='linear', fill_value='extrapolate', bounds_error=False
+        )
+        self.syn_dataset['y_atm'] = syn_fn(self.syn_dataset['tau'].values)
+        self.syn_dataset['y_atm'] = self.syn_dataset['y_atm'].clip(lower=1e-8)
 
-        atm_idxs = fit_data.groupby(['tau']).apply(lambda x: (x['underlying'] - x['strike_price']).abs().idxmin())
-        atm_rows = fit_data.loc[atm_idxs]
-
-        atm_fun = interp1d(atm_rows['tau'], atm_rows['total_var'], kind='linear', fill_value="extrapolate", bounds_error=False)
-        self.prs_dataset['y_atm'] = atm_fun(self.prs_dataset['tau'])
-        self.syn_dataset['y_atm'] = atm_fun(self.syn_dataset['tau'])
+        print(f'  y_atm range: [{self.prs_dataset["y_atm"].min():.6f}, '
+              f'{self.prs_dataset["y_atm"].max():.6f}]')
 
     def Prepare_train_data(self, train_start_date, train_end_date, batch_size=256):
         """Return (train_loader, val_loader, c6_loader) using proper TensorDataset/DataLoader.
