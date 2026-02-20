@@ -175,7 +175,7 @@ src/
   transfer.py           # Transfer learning utilities (weight loading, differential LR)
 scripts/
   download_data.py      # Download TXO data from FinMind API + TWII/VIX from yfinance
-  build_features.py     # Compute enhancement features (VIXTWN, RV, VRP, etc.)
+  build_features.py     # Compute enhancement features (RV, VRP, IV skew, etc.)
   compare_architectures.py  # Additive vs multiplicative A/B test
   plot_smooth_iv_check.py   # Fixed-yATM smooth surface verification
   plot_training_curves.py   # Training loss curve visualization
@@ -234,9 +234,9 @@ python train_diffusion.py --on_gpu --epochs 1000
 # Evaluate base model on test set
 python test.py --on_gpu
 
-# Generate figures from logs
+# Generate training curve plots from logs
 cd ..
-python scripts/generate_plots.py
+python scripts/plot_training_curves.py
 ```
 
 ### Transfer Learning
@@ -270,7 +270,7 @@ The system uses Taiwan Stock Exchange Options (TXO) data and supplementary marke
 # Download TXO options (2022-2026) from FinMind API + TWII/VIX from yfinance
 python scripts/download_data.py
 
-# Compute enhancement features (VIXTWN, realized volatility, VRP, etc.)
+# Compute enhancement features (realized volatility, VRP, IV skew, etc.)
 python scripts/build_features.py
 ```
 
@@ -289,7 +289,6 @@ These additional market features improve the Adjustment and DDPM models by provi
 
 | Feature | Description | Used By |
 |---------|-------------|---------|
-| VIXTWN | Synthetic Taiwan VIX computed from ATM options | DDPM |
 | Realized Volatility (20d) | Actual price volatility over past 20 days | Adjustment, DDPM |
 | IV Term Slope | Slope of the IV term structure (long vs short maturity) | Adjustment, DDPM |
 | IV Skew | Difference between put-side and call-side IV | Adjustment, DDPM |

@@ -380,7 +380,7 @@ class DataProcessor():
         dataset/enhancement/daily_features.csv, or None if not found.
 
         Features include: rv_5d..rv_60d, sp500_return, us10y_yield, usdtwd,
-        vixtwn, vixtwn_change, atm_iv, iv_term_slope, iv_skew,
+        atm_iv, iv_term_slope, iv_skew,
         inst_net_ratio, put_call_oi_ratio, futures_basis_pct, vrp_20d, etc.
         """
         enhance_path = os.path.join(self.folder, 'enhancement', 'daily_features.csv')
@@ -417,7 +417,7 @@ class DataProcessor():
         # Merge enhancement features if available
         enhance = self.load_enhancement_features()
         if enhance is not None:
-            enhance_cols = ['sp500_return', 'vixtwn_change', 'iv_term_slope',
+            enhance_cols = ['sp500_return', 'iv_term_slope',
                             'iv_skew', 'vrp_20d', 'futures_basis_pct', 'rv_20d']
             avail_cols = [c for c in enhance_cols if c in enhance.columns]
             if avail_cols:
@@ -452,7 +452,7 @@ class DataProcessor():
         # Base features + enhancement features if available
         features_cols = ['vix_change', 'underlying_return', 'logm', 'tau', 'tv_pred', 'itm_otm']
         if enhance is not None:
-            avail_cols = [c for c in ['sp500_return', 'vixtwn_change', 'iv_term_slope',
+            avail_cols = [c for c in ['sp500_return', 'iv_term_slope',
                                        'iv_skew', 'vrp_20d', 'futures_basis_pct', 'rv_20d']
                           if c in df.columns]
             features_cols = features_cols + avail_cols
@@ -622,9 +622,9 @@ class DataProcessor():
             # Append enhancement features if available
             if enhance_dict:
                 enh = enhance_dict.get(d_today, {})
-                for col in ['sp500_return', 'vixtwn', 'vixtwn_change',
-                            'iv_term_slope', 'iv_skew', 'vrp_20d',
-                            'futures_basis_pct', 'rv_20d', 'inst_net_ratio']:
+                for col in ['sp500_return', 'iv_term_slope', 'iv_skew',
+                            'vrp_20d', 'futures_basis_pct', 'rv_20d',
+                            'inst_net_ratio']:
                     val = enh.get(col, 0.0)
                     if val is None or (isinstance(val, float) and np.isnan(val)):
                         val = 0.0

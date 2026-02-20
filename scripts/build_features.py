@@ -12,10 +12,6 @@ Features:
         - futures_basis: TAIEX futures close - spot close (basis points)
         - futures_volume: front-month TAIEX futures volume
 
-    Computed from TXO data:
-        - vixtwn: Taiwan VIX (computed via VIX methodology from TXO prices)
-        - vixtwn_change: daily % change in VIXTWN
-
     Computed from TWII:
         - rv_5d, rv_10d, rv_20d, rv_60d: realized volatility at multiple horizons
         - vrp_20d: variance risk premium (ATM IV^2 - RV_20d^2)
@@ -51,7 +47,6 @@ warnings.filterwarnings('ignore')
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATASET_DIR = os.path.join(PROJECT_ROOT, 'dataset')
 ENHANCE_DIR = os.path.join(DATASET_DIR, 'enhancement')
-RAW_TXO_DIR = os.path.join(DATASET_DIR, 'raw_txo')
 
 OUTPUT_PATH = os.path.join(ENHANCE_DIR, 'daily_features.csv')
 
@@ -147,165 +142,7 @@ def download_external_data(start='2014-01-01'):
 
 
 # ===========================================================================
-# 2. Compute Taiwan VIX from raw TXO data
-# ===========================================================================
-def compute_vixtwn(raw_txo_dir, twii_path):
-    """Compute Taiwan VIX approximation using the CBOE VIX methodology.
-
-    VIX = 100 * sqrt( (2/T) * sum(dK/K^2 * e^(rT) * midpoint(K)) - (F/K0 - 1)^2 / T )
-
-    Simplified: we use settlement prices and near/next-term monthly options.
-    """
-    print('  Computing Taiwan VIX from TXO data...')
-
-    # Load TWII for underlying prices
-    twii = pd.read_csv(twii_path, parse_dates=['date'])
-    twii_dict = dict(zip(twii['date'], twii['Adj Close']))
-
-    # Load all raw TXO data
-    dfs = []
-    for f in sorted(os.listdir(raw_txo_dir)):
-        if f.startswith('TXO_') and f.endswith('.csv'):
-            dfs.append(pd.read_csv(os.path.join(raw_txo_dir, f)))
-    if not dfs:
-        print('    No raw TXO data found, skipping VIXTWN')
-        return pd.DataFrame()
-
-    raw = pd.concat(dfs, ignore_index=True)
-    raw['date'] = pd.to_datetime(raw['date'])
-    raw = raw[raw['trading_session'] == 'position']
-    raw = raw[raw['settlement_price'] > 0]
-
-    # Filter to monthly contracts only (no weekly W/F)
-    monthly_mask = raw['contract_date'].str.match(r'^\d{6}$')
-    raw = raw[monthly_mask].copy()
-
-    daily_vix = []
-
-    for date, day_data in raw.groupby('date'):
-        underlying = twii_dict.get(date)
-        if underlying is None:
-            continue
-
-        # Get unique expiries, sorted
-        expiries = sorted(day_data['contract_date'].unique())
-        if len(expiries) < 2:
-            continue
-
-        # Near-term and next-term
-        near_exp = expiries[0]
-        next_exp = expiries[1]
-
-        # Compute days to expiry (approximate)
-        near_year = int(near_exp[:4])
-        near_month = int(near_exp[4:])
-        near_days = max(1, (datetime(near_year, near_month, 15) - date).days)
-        next_year = int(next_exp[:4])
-        next_month = int(next_exp[4:])
-        next_days = max(1, (datetime(next_year, next_month, 15) - date).days)
-
-        near_T = near_days / 365.0
-        next_T = next_days / 365.0
-
-        if near_T <= 0 or next_T <= 0:
-            continue
-
-        # Compute variance contribution for each term
-        def compute_sigma2(term_data, T):
-            calls = term_data[term_data['call_put'] == 'call'].copy()
-            puts = term_data[term_data['call_put'] == 'put'].copy()
-
-            if len(calls) < 3 or len(puts) < 3:
-                return None
-
-            calls = calls.sort_values('strike_price')
-            puts = puts.sort_values('strike_price')
-
-            # ATM strike: minimize |call - put|
-            merged = pd.merge(calls[['strike_price', 'settlement_price']],
-                              puts[['strike_price', 'settlement_price']],
-                              on='strike_price', suffixes=('_call', '_put'))
-            if merged.empty:
-                return None
-
-            merged['diff'] = abs(merged['settlement_price_call'] - merged['settlement_price_put'])
-            atm_K = merged.loc[merged['diff'].idxmin(), 'strike_price']
-
-            # Use puts below ATM, calls above ATM, average at ATM
-            otm_puts = puts[puts['strike_price'] < atm_K].copy()
-            otm_calls = calls[calls['strike_price'] > atm_K].copy()
-
-            # Combine
-            options = pd.concat([
-                otm_puts[['strike_price', 'settlement_price']],
-                otm_calls[['strike_price', 'settlement_price']],
-            ]).sort_values('strike_price')
-
-            if len(options) < 3:
-                return None
-
-            # VIX formula: sigma^2 = (2/T) * sum(dK/K^2 * Q(K))
-            strikes = options['strike_price'].values
-            prices = options['settlement_price'].values
-
-            sigma2 = 0.0
-            for i in range(len(strikes)):
-                K = strikes[i]
-                Q = prices[i]
-                if i == 0:
-                    dK = strikes[1] - strikes[0]
-                elif i == len(strikes) - 1:
-                    dK = strikes[-1] - strikes[-2]
-                else:
-                    dK = (strikes[i+1] - strikes[i-1]) / 2.0
-
-                sigma2 += (dK / (K * K)) * Q
-
-            sigma2 = (2.0 / T) * sigma2
-
-            # Subtract forward price correction
-            F = atm_K  # approximate forward as ATM strike
-            sigma2 -= (1.0 / T) * (F / atm_K - 1) ** 2
-
-            return max(sigma2, 0)
-
-        near_data = day_data[day_data['contract_date'] == near_exp]
-        next_data = day_data[day_data['contract_date'] == next_exp]
-
-        s2_near = compute_sigma2(near_data, near_T)
-        s2_next = compute_sigma2(next_data, next_T)
-
-        if s2_near is None or s2_next is None:
-            continue
-
-        # Interpolate to 30-day
-        N_30 = 30 / 365.0
-        if next_T - near_T > 0:
-            w = (next_T - N_30) / (next_T - near_T)
-            w = max(0, min(1, w))
-            sigma2_30 = w * near_T * s2_near + (1 - w) * next_T * s2_next
-            sigma2_30 = sigma2_30 / N_30
-        else:
-            sigma2_30 = s2_near
-
-        vix_value = 100.0 * np.sqrt(max(sigma2_30, 0))
-
-        if 5 < vix_value < 150:  # sanity filter
-            daily_vix.append({'date': date, 'vixtwn': vix_value})
-
-    if not daily_vix:
-        print('    Could not compute VIXTWN')
-        return pd.DataFrame()
-
-    vix_df = pd.DataFrame(daily_vix)
-    vix_df = vix_df.sort_values('date')
-    vix_df['vixtwn_change'] = vix_df['vixtwn'].pct_change()
-    print(f'    {len(vix_df)} daily VIXTWN values (mean={vix_df["vixtwn"].mean():.1f})')
-    return vix_df
-
-
-# ===========================================================================
-# 3. Compute realized volatility from TWII
+# 2. Compute realized volatility from TWII
 # ===========================================================================
 def compute_realized_vol(twii_path):
     """Compute multi-horizon realized volatility from TWII returns."""
@@ -323,7 +160,7 @@ def compute_realized_vol(twii_path):
 
 
 # ===========================================================================
-# 4. Compute IV surface features from preprocessed data
+# 3. Compute IV surface features from preprocessed data
 # ===========================================================================
 def compute_iv_surface_features(preprocessed_path):
     """Compute daily ATM IV, term structure slope, and skew from preprocessed data."""
@@ -383,7 +220,7 @@ def compute_iv_surface_features(preprocessed_path):
 
 
 # ===========================================================================
-# 5. Aggregate institutional data
+# 4. Aggregate institutional data
 # ===========================================================================
 def aggregate_institutional(inst_path):
     """Aggregate institutional CSV into daily net buy/sell flows."""
@@ -419,7 +256,7 @@ def aggregate_institutional(inst_path):
 
 
 # ===========================================================================
-# 6. Aggregate open interest data
+# 5. Aggregate open interest data
 # ===========================================================================
 def aggregate_open_interest(oi_path):
     """Load and compute put/call OI ratio."""
@@ -442,7 +279,7 @@ def aggregate_open_interest(oi_path):
 
 
 # ===========================================================================
-# 7. Compute futures basis
+# 6. Compute futures basis
 # ===========================================================================
 def compute_futures_basis(futures_df, twii_path):
     """Compute futures-spot basis (futures close - TWII close)."""
@@ -484,28 +321,24 @@ def main():
     print('\n[1/7] Downloading external data...')
     ext = download_external_data()
 
-    # Step 2: Compute Taiwan VIX
-    print('\n[2/7] Computing Taiwan VIX...')
-    vixtwn = compute_vixtwn(RAW_TXO_DIR, twii_path)
-
-    # Step 3: Compute realized volatility
-    print('\n[3/7] Computing realized volatility...')
+    # Step 2: Compute realized volatility
+    print('\n[2/6] Computing realized volatility...')
     rv = compute_realized_vol(twii_path)
 
-    # Step 4: Compute IV surface features
-    print('\n[4/7] Computing IV surface features...')
+    # Step 3: Compute IV surface features
+    print('\n[3/6] Computing IV surface features...')
     iv_features = compute_iv_surface_features(preprocessed_path)
 
-    # Step 5: Aggregate institutional data
-    print('\n[5/7] Aggregating institutional data...')
+    # Step 4: Aggregate institutional data
+    print('\n[4/6] Aggregating institutional data...')
     inst = aggregate_institutional(inst_path)
 
-    # Step 6: Aggregate open interest
-    print('\n[6/7] Aggregating open interest...')
+    # Step 5: Aggregate open interest
+    print('\n[5/6] Aggregating open interest...')
     oi = aggregate_open_interest(oi_path)
 
-    # Step 7: Merge everything
-    print('\n[7/7] Merging all features...')
+    # Step 6: Merge everything
+    print('\n[6/6] Merging all features...')
 
     # Start with realized vol (has the full date range from TWII)
     daily = rv.copy()
@@ -515,7 +348,6 @@ def main():
         ('sp500', ext.get('sp500')),
         ('us10y', ext.get('us10y')),
         ('usdtwd', ext.get('usdtwd')),
-        ('vixtwn', vixtwn),
         ('iv_features', iv_features),
         ('inst', inst),
         ('oi', oi),

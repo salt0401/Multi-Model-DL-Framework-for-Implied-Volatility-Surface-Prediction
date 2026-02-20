@@ -58,7 +58,6 @@ Feature Engineering
     v
 Enhancement Features (dataset/enhancement/daily_features.csv)
     Created by: scripts/build_features.py
-    - VIXTWN (synthetic Taiwan VIX from ATM options)
     - Realized volatility (20-day)
     - IV term slope, IV skew
     - Variance risk premium (VRP)
@@ -210,9 +209,9 @@ Collocation points are re-sampled every 100 epochs via `DGMSampler`.
     Adjustment ratio or residual
 ```
 
-**Input features (13 dims):**
+**Input features (12 dims):**
 - Base (6): vix_change, underlying_return, logm, tau, tv_pred, itm_otm
-- Enhancement (7): sp500_return, vixtwn_change, iv_term_slope, iv_skew, vrp_20d, futures_basis_pct, rv_20d
+- Enhancement (6): sp500_return, iv_term_slope, iv_skew, vrp_20d, futures_basis_pct, rv_20d
 
 **Data preparation:** The `tv_pred` feature is computed by running the trained base model on all data points. Since `SmileModel.forward()` uses `autograd.grad(create_graph=True)` for second-order derivatives, this consumes significant memory. The implementation uses **chunked inference** (5000 rows per batch) to avoid GPU OOM.
 
@@ -293,7 +292,7 @@ Collocation points are re-sampled every 100 epochs via `DGMSampler`.
 
 **FiLM conditioning:** Each U-Net block receives `condition = time_embed + market_features` and applies Feature-wise Linear Modulation: `gamma * x + beta` where gamma and beta are projected from the condition vector.
 
-**Condition features (13 dims):** Base 4 (underlying price, VIX, volume, returns) + 9 enhancement features (S&P 500 return, VIXTWN, VIXTWN change, IV term slope, IV skew, VRP, futures basis, realized vol, institutional net ratio).
+**Condition features (11 dims):** Base 4 (VIX level, VIX change, underlying return, realized vol) + 7 enhancement features (S&P 500 return, IV term slope, IV skew, VRP, futures basis, realized vol 20d, institutional net ratio).
 
 ## Transfer Learning (`transfer.py`)
 

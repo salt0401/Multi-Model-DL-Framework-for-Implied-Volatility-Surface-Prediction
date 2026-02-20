@@ -218,8 +218,8 @@ All five models were retrained on the extended 480,194-row dataset (2014-01-02 t
 
 - **Training period:** 2014-2024 (vs. 2014-2020 in Round 1)
 - **Test period:** 2025-2026 (vs. 2021 in Round 1) — out-of-sample on recent market conditions
-- **Enhancement features:** 9 additional market features added to Adjustment and DDPM models:
-  - S&P 500 return, VIXTWN (synthetic Taiwan VIX), VIXTWN change, IV term slope, IV skew, VRP (20d), futures basis %, realized vol (20d), institutional net ratio
+- **Enhancement features:** 7 additional market features added to Adjustment and DDPM models:
+  - S&P 500 return, IV term slope, IV skew, VRP (20d), futures basis %, realized vol (20d), institutional net ratio
 - **Transfer learning:** Pretrained weights loaded with partial transfer for dimension-mismatched layers, differential learning rates (pretrained: lr×0.1, new: lr×1.0)
 
 ### Data Pipeline

@@ -147,21 +147,19 @@ The preprocessing pipeline performs the following feature engineering steps:
 
 #### 3.3.3 Enhancement Features
 
-Nine additional daily market features are computed to enrich the conditioning of the DDPM and Adjustment models:
+Seven additional daily market features are computed to enrich the conditioning of the DDPM and Adjustment models:
 
 | Feature | Computation | Rationale |
 |---------|-------------|-----------|
-| **VIXTWN** | Synthetic Taiwan VIX via CBOE VIX methodology applied to TXO near/next-term OTM option prices, interpolated to 30-day variance | Local fear gauge; Taiwan has no official VIX |
 | **Realized Volatility (20d)** | Annualized standard deviation of 20-day log returns: $\text{RV} = \sigma_{20d} \cdot \sqrt{252}$ | Actual historical price fluctuation |
 | **IV Term Slope** | Mean long-dated ATM IV ($\tau > 0.3$) minus mean short-dated ATM IV ($\tau < 0.12$) | Term structure curvature; negative = inversion (crisis signal) |
 | **IV Skew** | Mean OTM put IV ($-0.2 < k < -0.05$) minus ATM IV | Demand for downside protection |
 | **Variance Risk Premium (VRP)** | $\text{ATM\_IV}^2 - \text{RV}_{20d}^2$ | Gap between implied and realized — "fear premium" |
 | **S&P 500 Return** | Overnight return on ^GSPC from Yahoo Finance | US market spillover to Asia |
 | **Futures Basis %** | $(F_{\text{close}} - S_{\text{close}}) / S_{\text{close}} \times 100$ | Market sentiment; positive = bullish |
-| **VIXTWN Change** | Daily percentage change in VIXTWN | Speed of fear change |
 | **Institutional Net Ratio** | $(\text{Long} - \text{Short}) / (\text{Long} + \text{Short})$ from FinMind | Smart money positioning |
 
-These features are computed by `scripts/build_features.py` and stored as a single daily CSV (2,947 rows × 23 columns).
+These features are computed by `scripts/build_features.py` and stored as a single daily CSV.
 
 ### 3.4 Train-Test Split
 
@@ -301,12 +299,11 @@ The 13 input features per timestep are:
 | 4 | Base model TV prediction | Base model forward pass |
 | 5 | ITM/OTM indicator | Options data |
 | 6 | S&P 500 return | Yahoo Finance |
-| 7 | VIXTWN change | Computed from TXO |
-| 8 | IV term slope | Computed from TXO |
-| 9 | IV skew | Computed from TXO |
-| 10 | VRP (20d) | Computed |
-| 11 | Futures basis % | FinMind |
-| 12 | Realized vol (20d) | TAIEX returns |
+| 7 | IV term slope | Computed from TXO |
+| 8 | IV skew | Computed from TXO |
+| 9 | VRP (20d) | Computed |
+| 10 | Futures basis % | FinMind |
+| 11 | Realized vol (20d) | TAIEX returns |
 
 The `tv_pred` feature (index 4) is computed by running the trained base model on all data points. To avoid GPU out-of-memory errors from autograd graph accumulation during this inference step, we process the data in chunks of 5,000 rows.
 
@@ -822,7 +819,12 @@ smart-data-analysis-main/
 ├── scripts/                    # Standalone utility scripts
 │   ├── download_data.py        # Data acquisition: FinMind API + yfinance
 │   ├── build_features.py       # Enhancement feature computation pipeline
-│   └── generate_plots.py       # Figure generation from training log files
+│   ├── compare_architectures.py# Additive vs multiplicative A/B test
+│   ├── plot_smooth_iv_check.py # Fixed-yATM smooth surface verification
+│   ├── plot_training_curves.py # Training loss curve visualization
+│   ├── inspect_ssvi_params.py  # SSVI parameter inspection
+│   ├── diagnose_rho_gradient.py# Per-loss rho gradient analysis
+│   └── train_diagnose.py       # Training with per-epoch parameter tracking
 │
 ├── dataset/                    # Data files (gitignored except metadata)
 │   ├── prs_dataset_full.csv    # Primary dataset (480K rows)
@@ -830,10 +832,11 @@ smart-data-analysis-main/
 │   └── enhancement/            # daily_features.csv (2,947 rows × 23 columns)
 │
 ├── models/                     # Trained model weights (.pt files, gitignored)
-├── figures/                    # 9 publication figures (committed)
+├── logs/                       # Training logs, metrics JSON, and generated plots
 ├── docs/                       # Documentation
 │   ├── research_report.md      # This report
-│   └── keynote.pdf             # Presentation slides
+│   ├── discussion_notes.md     # Issue tracking and resolution log
+│   └── prediction_analysis.md  # Architecture fix notes
 ├── requirements.txt            # Python dependencies
 ├── README.md                   # Project overview (CS-audience)
 ├── EXPERIMENT.md               # Detailed experimental results
@@ -888,14 +891,13 @@ The merge pipeline computes implied volatility for new rows using the Newton-Rap
 
 **Stage 2: Enhancement Features (`scripts/build_features.py`)**
 
-A 7-step feature engineering pipeline computes 23 daily market features from external data sources:
+A 6-step feature engineering pipeline computes daily market features from external data sources:
 
 1. Download S&P 500 daily returns via yfinance
-2. Compute VIXTWN — a synthetic Taiwan VIX derived from ATM option prices using the VIX methodology
-3. Compute 20-day realized volatility from TAIEX daily returns
-4. Calculate IV term slope (long minus short maturity ATM IV) and IV skew (OTM put minus ATM IV)
-5. Derive variance risk premium: VRP = IV² − RV²
-6. Extract institutional net buy/sell ratio from TWSE daily data
+2. Compute 20-day realized volatility from TAIEX daily returns
+3. Calculate IV term slope (long minus short maturity ATM IV) and IV skew (OTM put minus ATM IV)
+4. Derive variance risk premium: VRP = IV² − RV²
+5. Extract institutional net buy/sell ratio from TWSE daily data
 7. Compute futures basis percentage from TAIEX futures vs. spot
 
 The output is `dataset/enhancement/daily_features.csv` (2,947 rows × 23 columns), which is merged into the main pipeline during training via date-based joins.
@@ -1004,7 +1006,7 @@ def test_M3_additive_derivatives(tiny_batch, device):
 
 Violation rates are reported as percentages and serve as important qualitative metrics beyond point prediction accuracy.
 
-**Automated figure generation.** The `scripts/generate_plots.py` script parses training log files with regex patterns and generates all 9 publication figures in a single run. This includes training loss curves (full and zoomed), validation RMSE trajectories, IV smile overlays, 3D IV surface plots, and model comparison bar charts. The script is idempotent — it regenerates all figures from logs without requiring model weights or GPU access.
+**Automated figure generation.** Several scripts in `scripts/` generate diagnostic and training visualizations: `plot_training_curves.py` generates training loss curves from log data, `plot_smooth_iv_check.py` produces fixed-yATM smooth surface verification plots, and `compare_architectures.py` runs and visualizes the additive vs. multiplicative architecture A/B test. All scripts output to `logs/` and are idempotent — they can be re-run without requiring model weights or GPU access.
 
 ### 10.7 Transfer Learning Engineering
 
