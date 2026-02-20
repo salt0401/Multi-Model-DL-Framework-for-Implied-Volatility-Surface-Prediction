@@ -95,52 +95,60 @@ PyTorch DataLoaders
 
 ## Model Architectures
 
-### Phase 1: Base Model
+### Phase 1: Base Model (Additive Architecture)
+
+> **Architecture decision (2026-02-20):** Additive formulation confirmed via A/B experiment. Multiplicative (`SSVI * NN`) explodes at epoch 2 due to product-rule cross-terms in butterfly constraint derivatives. See `logs/architecture_comparison.json`.
 
 ```
-                    logm (1-dim)
-                         |
-              +----------+----------+
-              |          |          |
-          SmileModel  SmileModel  ... (x5 ensemble)
-              |          |          |
-          [64]-[32]-[16]-[1]     (3-layer MLP, LayerNorm)
-              |          |          |
-              |     autograd.grad   |
-              |     (1st & 2nd      |
-              |      derivatives)   |
-              |          |          |
-          (TV, dTV/dk, d2TV/dk2, BSModel_baseline)
-              |          |          |
-              +-----+----+----------+
+            (tau, logm, yATM)
                     |
-             SoftmaxModel
-             (learned weights,
-              input: logm, tau, yATM)
-                    |
-             Weighted sum of
-             ensemble predictions
-                    |
-             WeightedSumLoss
-             = w1*data + w2*ssvi + w3*calendar
-               + w4*butterfly + w5*density + w6*smooth
+         +----------+----------+
+         |                     |
+     SSVIModel              SmileModel x5 ensemble
+     (logm, yATM)           (tau, logm)
+         |                     |
+     output_Prior          output_NN
+         |                     |
+         |              yATM * output_NN
+         |                     |
+         +------( + )----------+
+                 |
+          output = SSVI + yATM * NN   (additive)
+                 |
+          SoftmaxModel
+          (learned weights, input: logm, tau, yATM)
+                 |
+          Weighted sum of 5 ensemble predictions
+                 |
+          WeightedSumLoss
+          = w1*RMSE + w2*MAPE + w3*calendar
+            + w4*butterfly + w5*density + w6*upperbound
 ```
+
+**SingleModel forward (`model.py`):**
+```python
+output = output_Prior + yATM * output_NN
+grad_ttm1 = grad_ttm1_prior + yATM * grad_ttm1_NN
+grad_logm1 = grad_logm1_prior + yATM * grad_logm1_NN
+grad_logm2 = grad_logm2_prior + yATM * grad_logm2_NN
+```
+No cross-terms in derivatives (unlike multiplicative product rule).
 
 **SmileModel details:**
-- Input: logm (scalar) -> detach + requires_grad_(True)
-- 3 hidden layers: 64 -> 32 -> 16, each with LayerNorm
-- Output: 1 scalar (total variance)
+- Input: tau, logm (each scalar) -> detach + requires_grad_(True)
+- 3 hidden layers: 64 -> 32 -> 16, with custom bilinear input + LayerNorm
+- Output: 1 scalar (total variance correction)
 - Computes 1st derivative via `autograd.grad(..., create_graph=True)`
 - Computes 2nd derivative via `autograd.grad(..., retain_graph=True)`
-- Returns 4-tuple: `(TV, grad1, grad2, BS_baseline)`
+- Returns 4-tuple: `(TV, grad_ttm, grad_logm1, grad_logm2)`
 
-**Loss components:**
-1. **Data loss** — MSE between predicted and observed total variance
-2. **SSVI loss** — MSE between NN output and SSVI parametric prediction
-3. **Calendar loss** — penalizes `dw/dtau < 0` (variance must increase with time)
-4. **Butterfly loss** — penalizes negative probability density (convexity constraint)
-5. **Density loss** — penalizes `|d2w/dk2|` (smoothness of the density)
-6. **Smoothness loss** — L2 regularization on curvature
+**Loss components (weights `[1, 1, 10, 10, 10, 10]`):**
+1. **RMSE** — Root mean squared error of total variance predictions
+2. **MAPE** — Mean absolute percentage error (with ε=0.005 stability)
+3. **Calendar** — penalizes `dw/dtau < 0` (variance must increase with time)
+4. **Butterfly** — penalizes negative probability density (convexity constraint)
+5. **Density** — penalizes `|d2w/dk2|` on synthetic wing data
+6. **Upper bound** — penalizes `w > 2|k|` on synthetic wing data (Lee's bound)
 
 ### Phase 2: DGM PDE Solver
 
@@ -212,6 +220,8 @@ Collocation points are re-sampled every 100 epochs via `DGMSampler`.
 1. `ratio` — multiplicative: `adjusted_IV = base_IV * ratio`
 2. `residual` — additive: `adjusted_IV = base_IV + residual`
 3. `direct` — replace: `adjusted_IV = prediction`
+
+> **Data leakage fix (2026-02-20):** The original `train_adjustment.py` used `random_split`, causing temporal leakage. Now uses chronological split + KDE fitted on train targets only. See `discussion_notes.md` §3.4.
 
 ### Phase 4: HyperIV
 
@@ -374,15 +384,15 @@ Results from the extended dataset experiment (train 2014-2024, test 2025-2026, t
 | File | Purpose |
 |------|---------|
 | `src/config.ini` | All hyperparameters, paths, data splits |
-| `src/model.py` | SmileModel, SingleModel, MultiModel, SoftmaxModel, losses |
-| `src/dataset.py` | DataProcessor: loading, features, splits, loaders |
+| `src/model.py` | SSVIModel, SmileModel, SingleModel, MultiModel, SoftmaxModel, losses |
+| `src/dataset.py` | DataProcessor: loading, features, per-date yATM, splits, loaders |
 | `src/train.py` | Base model training loop |
 | `src/experiment.py` | Base model evaluation + plots |
 | `src/test.py` | Base model evaluation + arbitrage violation checks |
 | `src/dgm.py` | DGM PDE solver model + sampler |
 | `src/train_dgm.py` | DGM training script |
 | `src/adjustment.py` | AdjustmentModel (GRU+Attention) |
-| `src/train_adjustment.py` | Adjustment training script |
+| `src/train_adjustment.py` | Adjustment training (chronological split) |
 | `src/hyperiv.py` | HyperIV (Transformer + Hypernetwork) |
 | `src/train_hyperiv.py` | HyperIV training script |
 | `src/diffusion.py` | DDPM (1D U-Net + FiLM conditioning) |
@@ -392,4 +402,9 @@ Results from the extended dataset experiment (train 2014-2024, test 2025-2026, t
 | `src/utils.py` | Config loading, metrics, early stopping, seed |
 | `scripts/download_data.py` | Data download pipeline (FinMind + yfinance) |
 | `scripts/build_features.py` | Enhancement feature computation |
-| `scripts/generate_plots.py` | Figure generation from training logs |
+| `scripts/compare_architectures.py` | Additive vs multiplicative A/B test |
+| `scripts/plot_smooth_iv_check.py` | Fixed-yATM smooth surface verification |
+| `scripts/plot_training_curves.py` | Training loss curve visualization |
+| `scripts/inspect_ssvi_params.py` | SSVI parameter inspection |
+| `scripts/diagnose_rho_gradient.py` | Per-loss rho gradient analysis |
+| `scripts/train_diagnose.py` | Training with per-epoch parameter tracking |

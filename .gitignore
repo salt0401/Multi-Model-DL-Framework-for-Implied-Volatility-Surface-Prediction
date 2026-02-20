@@ -21,6 +21,9 @@ dataset/
 # Large docs
 docs/*.pdf
 
+# Session logs (local conversation records)
+docs/session_logs/
+
 # OS artifacts
 nul
 .DS_Store

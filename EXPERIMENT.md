@@ -10,7 +10,7 @@ Detailed training results for all five IV surface prediction models, trained on 
 
 | Parameter | Value |
 |-----------|-------|
-| Architecture | SSVI prior + 5 SmileModel NNs (64-32-16) |
+| Architecture | SSVI prior + 5 SmileModel NNs (64-32-16), **additive**: `w = SSVI + yATM * NN` |
 | Ensemble method | Learned softmax weights |
 | Learning rate | 0.001 |
 | Batch size | 256 |
@@ -27,9 +27,6 @@ Detailed training results for all five IV surface prediction models, trained on 
 - Converged by epoch ~20, then gradually overfit
 - A second instability spike at epoch 62 (train loss = 38.4) and epoch 74 (train loss = 59,351) triggered early stopping
 
-![Base Model Training — Full](figures/base_model_training.png)
-
-![Base Model Training — Zoomed](figures/base_model_training_zoomed.png)
 
 ### Test Metrics
 
@@ -44,7 +41,7 @@ Detailed training results for all five IV surface prediction models, trained on 
 
 The high MAPE (44.1%) is driven by near-ATM options where true total variance is very small — even a small absolute error produces a large percentage error. The 74% butterfly violation rate indicates the model struggles with the curvature constraint in the wings. This is a known limitation of additive ensemble approaches: each SmileModel independently predicts a smooth curve, but the softmax-weighted combination can produce kinks.
 
-![IV Smiles — Predicted vs Observed](figures/iv_smiles.png)
+> **Architecture update (2026-02-20):** An A/B experiment confirmed the additive formulation (`w = SSVI + yATM * NN`) is strictly superior to the original multiplicative formulation (`w = SSVI * NN`). The multiplicative version explodes at epoch 2 due to product-rule cross-terms in the butterfly constraint derivatives. Full results in `logs/architecture_comparison.json`.
 
 ## 2. HyperIV (Hypernetwork)
 
@@ -67,7 +64,7 @@ The high MAPE (44.1%) is driven by near-ATM options where true total variance is
 - Rapid convergence: loss dropped from 2228 to 1.3e-5 in first 10 epochs
 - Slight overfitting after epoch 10 (train continued improving, val plateaued)
 
-![HyperIV Training](figures/hyperiv_training.png)
+
 
 ### Test Metrics
 
@@ -107,7 +104,7 @@ All four loss components decreased monotonically over 5000 epochs:
 | BC | 0.001106 | 0.000025 | 0.000006 |
 | TC | 0.004036 | 0.000337 | 0.000132 |
 
-![DGM Training](figures/dgm_training.png)
+
 
 ### Test Metrics
 
@@ -140,6 +137,8 @@ The BS price RMSE of 0.036 means model prices differ from analytical Black-Schol
 
 The adjustment model serves as a post-processor that applies time-varying corrections during structural breaks. It was trained after the base model to capture regime-specific deviations. The KDE-weighted loss ensures the model pays attention to tail events (extreme IV values) rather than just minimizing average error.
 
+> **Data leakage fix (2026-02-20):** The original `train_adjustment.py` used `random_split` for train/val, causing temporal leakage (future market features in train, sequence overlap, cross-option date mixing). Now uses chronological split (first 80% dates → train, last 20% → val). KDE weights are fitted on train targets only.
+
 ## 5. DDPM (Diffusion Model)
 
 ### Configuration
@@ -169,9 +168,7 @@ Train loss decreased steadily from 0.099 to 8.9e-5 over 1000 epochs. Validation 
 | Epoch 900 | 0.00706 (best) |
 | Epoch 1000 | 0.00725 |
 
-![DDPM Training Loss](figures/diffusion_training.png)
 
-![DDPM Validation RMSE](figures/diffusion_val_rmse.png)
 
 ### Test Metrics
 
@@ -193,7 +190,7 @@ The test RMSE (0.0029) is substantially better than the best validation RMSE (0.
 | MAPE | 44.1% | 20.7% | -53.1% |
 | IV-RMSE | 0.209 | 0.076 | -63.6% |
 
-![Model Comparison](figures/model_comparison.png)
+
 
 ### Strengths and Weaknesses
 
@@ -316,13 +313,7 @@ The `src/transfer.py` module handles:
 - **Differential LR:** Pretrained layers use base_lr × 0.1, reinitialized layers use base_lr × 1.0
 - **Partial transfer:** `load_finetune_weights()` returns (transferred, reinitialized) parameter name sets for optimizer group construction
 
-![Predicted IV Surface (2025-2026)](figures/iv_surface_pred.png)
 
-![IV Smiles — Predicted vs Observed (2025-2026)](figures/iv_smiles.png)
-
-![Model Comparison (2025-2026)](figures/model_comparison.png)
-
-![DDPM Validation RMSE (Extended)](figures/diffusion_val_rmse.png)
 
 ## Future Work
 
@@ -331,5 +322,5 @@ The `src/transfer.py` module handles:
 - Explore attention-based architectures for the base model (replace per-expiration SmileModels with a single cross-expiration model)
 - Extend to American-style options using the DGM PDE framework with early exercise boundary
 - Address base model gradient explosion with adaptive loss weighting or SSVI parameter clamping
-- Optimize adjustment model data preparation to enable GPU training (e.g., chunked forward pass, no_grad for non-gradient features)
+- ~~Optimize adjustment model data preparation to enable GPU training~~ → Resolved: chunked inference (5000 rows/batch) implemented in `dataset.py`
 - Add model stacking/ensemble across the five models for combined predictions

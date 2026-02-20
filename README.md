@@ -39,7 +39,9 @@ This system uses five complementary models, each addressing different aspects of
 
 **How it works:** An **SSVI parametric model** (a well-known formula from quantitative finance) provides the structural backbone — it guarantees the predicted surface has a mathematically valid shape. A **neural network ensemble** (5 small networks combined) then learns the residual patterns that SSVI misses, like local bumps or skew features unique to the Taiwan market.
 
-Each neural network ("SmileModel") uses automatic differentiation to compute first and second derivatives of its output, which are fed into physics-based penalty terms. The loss function has six components: (1) fit the observed data, (2) stay close to the SSVI prior, (3) enforce calendar spread constraints (longer-dated options must be worth more), (4) enforce butterfly constraints (no negative probabilities), (5) penalize extreme density curvature, and (6) encourage smoothness.
+Each neural network ("SmileModel") uses automatic differentiation to compute first and second derivatives of its output, which are fed into physics-based penalty terms. The architecture uses an **additive formulation**: `w = SSVI(logm, yATM) + yATM * NN(tau, logm)`, where the yATM scaling keeps the NN correction proportional to the current volatility level. An earlier multiplicative version was abandoned after A/B testing showed it causes gradient explosion within 2 epochs (see `logs/architecture_comparison.json`).
+
+The loss function has six components: (1) fit the observed data (RMSE), (2) stay close to the SSVI prior (MAPE), (3) enforce calendar spread constraints (longer-dated options must be worth more), (4) enforce butterfly constraints (no negative probabilities), (5) penalize extreme density curvature, and (6) encourage smoothness.
 
 **Why an ensemble?** Training 5 networks with different random initializations and averaging their predictions reduces variance and produces more stable results than any single network.
 
@@ -128,25 +130,9 @@ HyperIV consistently outperforms the base model — **53% lower TV-RMSE** and **
 | DDPM | Surface forecasting | Test RMSE: 0.0072 | 1000 ep, ~8h GPU |
 | Adjustment | Crisis correction | Test RMSE: 52.20, MAPE: 70.15% | 1000 ep, ~46h CPU |
 
-### Training Curves
+### Training Curves & Visualizations
 
-| Base Model (105 epochs, early stopped) | HyperIV (69 epochs, early stopped) |
-|:---:|:---:|
-| ![Base Model Training](figures/base_model_training_zoomed.png) | ![HyperIV Training](figures/hyperiv_training.png) |
-
-| DGM PDE Solver (5000 epochs) | DDPM Diffusion (1000 epochs) |
-|:---:|:---:|
-| ![DGM Training](figures/dgm_training.png) | ![DDPM Training](figures/diffusion_training.png) |
-
-### Model Comparison & IV Surface Visualizations
-
-| Model Comparison (2025-2026) | DDPM Validation RMSE |
-|:---:|:---:|
-| ![Model Comparison](figures/model_comparison.png) | ![DDPM Val RMSE](figures/diffusion_val_rmse.png) |
-
-| Predicted vs Observed IV Smiles | Predicted 3D IV Surface |
-|:---:|:---:|
-| ![IV Smiles](figures/iv_smiles.png) | ![IV Surface](figures/iv_surface_pred.png) |
+Training curve and IV surface visualizations can be regenerated from the training logs using `scripts/plot_training_curves.py`. The training logs are stored in `logs/` and results are documented in `EXPERIMENT.md`.
 
 ## Key Findings
 
@@ -190,10 +176,16 @@ src/
 scripts/
   download_data.py      # Download TXO data from FinMind API + TWII/VIX from yfinance
   build_features.py     # Compute enhancement features (VIXTWN, RV, VRP, etc.)
-  generate_plots.py     # Regenerate all figures from training logs
-figures/                # Experimental plots (9 PNGs)
+  compare_architectures.py  # Additive vs multiplicative A/B test
+  plot_smooth_iv_check.py   # Fixed-yATM smooth surface verification
+  plot_training_curves.py   # Training loss curve visualization
+  inspect_ssvi_params.py    # SSVI parameter inspection
+  diagnose_rho_gradient.py  # Per-loss rho gradient analysis
+  train_diagnose.py         # Training with per-epoch parameter tracking
 docs/
-  keynote.pdf           # Presentation slides
+  research_report.md    # Full research paper (1200 lines)
+  discussion_notes.md   # Issue tracking and resolution log
+  prediction_analysis.md # Architecture fix notes
 models/                 # Trained model weights (.pt, gitignored)
 dataset/                # TXO options data (gitignored)
 logs/                   # Training logs and metrics (gitignored)
