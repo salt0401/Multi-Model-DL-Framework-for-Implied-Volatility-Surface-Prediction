@@ -4,7 +4,7 @@
 
 ## Abstract
 
-Accurate prediction of the implied volatility (IV) surface is fundamental to derivatives pricing, risk management, and portfolio hedging. This paper presents a comprehensive multi-model framework for predicting the IV surface of Taiwan Stock Exchange Options (TXO), integrating five complementary deep learning models: (1) an SSVI-constrained neural network ensemble for physics-informed interpolation, (2) a Deep Galerkin Method (DGM) network for mesh-free PDE solving, (3) a GRU-Attention adjustment model for structural break correction, (4) a HyperIV hypernetwork for state-of-the-art per-surface specialization, and (5) a conditional Denoising Diffusion Probabilistic Model (DDPM) for next-day surface forecasting. Each model addresses a distinct aspect of IV surface modeling — from arbitrage-free interpolation to crisis-period adjustment and generative forecasting. We conduct two rounds of experiments: Round 1 on 254,044 observations (2014–2021) and Round 2 on 480,194 observations (2014–2026) with transfer learning and nine additional market features. Our results demonstrate that HyperIV achieves the best point prediction performance (TV-RMSE 0.0056, MAPE 20.0%), representing a 53% improvement over the base model, while the DDPM generates coherent full-surface forecasts with test RMSE of 0.0072. We also introduce a transfer learning framework with differential learning rates that enables efficient model adaptation when dataset dimensions change. The complete system is validated with 215 unit tests and evaluated on strictly out-of-sample 2025–2026 data.
+Accurate prediction of the implied volatility (IV) surface is fundamental to derivatives pricing, risk management, and portfolio hedging. This paper presents a comprehensive multi-model framework for predicting the IV surface of Taiwan Stock Exchange Options (TXO), integrating five complementary deep learning models: (1) an SSVI-constrained neural network ensemble for physics-informed interpolation, (2) a Deep Galerkin Method (DGM) network for mesh-free PDE solving, (3) a GRU-Attention adjustment model for structural break correction, (4) a HyperIV hypernetwork for state-of-the-art per-surface specialization, and (5) a conditional Denoising Diffusion Probabilistic Model (DDPM) for next-day surface forecasting. Each model addresses a distinct aspect of IV surface modeling — from arbitrage-free interpolation to crisis-period adjustment and generative forecasting. We conduct two rounds of experiments: Round 1 on 254,044 observations (2014–2021) and Round 2 on 480,194 observations (2014–2026) with transfer learning and nine additional market features. Preliminary results show the base model achieves TV-RMSE 0.0120 and MAPE 33.0% on out-of-sample 2025–2026 data, with HyperIV and DDPM results pending revalidation after codebase updates. We also introduce a transfer learning framework with differential learning rates that enables efficient model adaptation when dataset dimensions change. The complete system is validated with 215 unit tests and evaluated on strictly out-of-sample data.
 
 **Keywords:** implied volatility surface, SSVI, deep learning, hypernetwork, diffusion model, physics-informed neural network, options pricing, transfer learning
 
@@ -32,7 +32,7 @@ This paper makes the following contributions:
 
 3. **HyperIV adaptation for TXO.** We adapt the state-of-the-art HyperIV architecture (ICML 2025) — which uses a Transformer set encoder and hypernetwork to generate per-surface specialized prediction networks — to the Taiwan options market, achieving a 53% reduction in TV-RMSE compared to the base model.
 
-4. **Conditional DDPM for surface forecasting.** We apply Denoising Diffusion Probabilistic Models to financial surface prediction, conditioned on 13 market features via FiLM (Feature-wise Linear Modulation) layers. To our knowledge, this is among the first applications of diffusion models to IV surface generation.
+4. **Conditional DDPM for surface forecasting.** We apply Denoising Diffusion Probabilistic Models to financial surface prediction, conditioned on 11 market features via FiLM (Feature-wise Linear Modulation) layers. To our knowledge, this is among the first applications of diffusion models to IV surface generation.
 
 5. **Transfer learning framework.** We develop a transfer learning module that handles dimension mismatches (e.g., when adding new input features), applies differential learning rates for pretrained versus new parameters, and supports optional layer freezing. This enables efficient model retraining when datasets are extended.
 
@@ -273,7 +273,7 @@ The base model learns a time-invariant mapping that works well during normal mar
 
 #### 4.3.2 Architecture
 
-The `TVAdjustmentModel` processes a 20-day sequence of 13-dimensional daily feature vectors through:
+The `TVAdjustmentModel` processes a 20-day sequence of 12-dimensional daily feature vectors through:
 
 1. **GRU encoder** (2 layers, 64 hidden units, dropout 0.2): Processes the temporal sequence, building a representation of the current market regime. The bidirectional option is not used (unidirectional to respect causality).
 
@@ -288,7 +288,7 @@ The `TVAdjustmentModel` processes a 20-day sequence of 13-dimensional daily feat
 
 #### 4.3.3 Input Features
 
-The 13 input features per timestep are:
+The 12 input features per timestep are:
 
 | Index | Feature | Source |
 |-------|---------|--------|
@@ -375,7 +375,7 @@ The IV surface is discretized onto a fixed grid of $N_\tau = 10$ time-to-expiry 
 **Conditioning via FiLM (`FiLMLayer`):**
 Each ResBlock receives a condition vector $c = t_{\text{emb}} + c_{\text{market}}$ where:
 - $t_{\text{emb}}$ is the sinusoidal time embedding of the diffusion timestep, projected through a 2-layer MLP with SiLU activation.
-- $c_{\text{market}}$ encodes today's surface + 13 market features through a 2-layer MLP.
+- $c_{\text{market}}$ encodes today's surface + 11 market features through a 2-layer MLP.
 
 FiLM modulates convolutional features: $\hat{h} = \gamma \odot h + \beta$ where $\gamma, \beta$ are projected from the condition vector.
 
@@ -418,7 +418,7 @@ When the dataset is extended (e.g., adding years 2022–2026) or enhanced (addin
 
 ### 5.1 Dimension Mismatch Handling
 
-When input dimensions change (e.g., Adjustment model GRU input from 6 to 13 features), the `load_finetune_weights()` function performs partial weight transfer:
+When input dimensions change (e.g., Adjustment model GRU input from 6 to 12 features), the `load_finetune_weights()` function performs partial weight transfer:
 
 1. For **matching-shape parameters:** Weights are copied directly from the checkpoint.
 2. For **dimension-mismatched weight matrices:** The new parameter is initialized with Xavier uniform. Then, the overlapping portion of the old weights is copied:
@@ -532,6 +532,8 @@ Test distribution:
 
 ## 7. Results and Analysis
 
+> **Note (2026-02-20):** Model 1 (Base SSVI+NN) results below are current. All Model 2-5 (HyperIV, DGM, DDPM, Adjustment) results are from a previous training run based on an older Model 1 checkpoint and dataset configuration (including the since-removed `vixtwn_change` feature). These results are retained for reference but **must be regenerated** before publication. Sections marked with ⚠️ contain stale data.
+
 ### 7.1 Round 1: Original Dataset (2014–2021)
 
 #### 7.1.1 Base Model
@@ -544,33 +546,17 @@ The base model (SSVI + 5-NN ensemble) was trained for 76/2000 epochs before earl
 
 The high MAPE is driven by near-ATM options where total variance is very small — even a small absolute error produces a large percentage error. The 74% butterfly violation rate indicates the ensemble's softmax-weighted combination can produce curvature artifacts despite individual SmileModels being smooth.
 
-#### 7.1.2 HyperIV
+#### ⚠️ 7.1.2 HyperIV — *Pending retraining*
 
-HyperIV exhibited rapid convergence: loss dropped from 2,228 to $1.3 \times 10^{-5}$ in the first 10 epochs. Best validation loss was $1.76 \times 10^{-4}$ at epoch 8, with early stopping at epoch 58.
+> Results removed. Previous results were based on an older codebase. Will be regenerated after retraining.
 
-- **Test performance:** TV-RMSE 0.0074, MAPE 20.7%, IV-RMSE 0.076.
-- **Improvement over base:** 45% lower TV-RMSE, 53% lower MAPE, 64% lower IV-RMSE.
+#### ⚠️ 7.1.3 DGM — *Pending retraining*
 
-The Transformer set encoder is critical: by attending across all 50 reference options simultaneously, it captures cross-strike and cross-maturity relationships that the base model's per-expiration SmileModels miss.
+> Results removed. Will be regenerated after retraining.
 
-#### 7.1.3 DGM
+#### ⚠️ 7.1.4 DDPM — *Pending retraining*
 
-All four loss components (total, PDE, boundary, terminal) decreased monotonically over 5,000 epochs:
-
-| Component | Epoch 100 | Epoch 2500 | Epoch 5000 |
-|-----------|-----------|------------|------------|
-| Total | 0.006215 | 0.000450 | 0.000166 |
-| PDE | 0.001073 | 0.000088 | 0.000028 |
-| BC | 0.001106 | 0.000025 | 0.000006 |
-| TC | 0.004036 | 0.000337 | 0.000132 |
-
-Terminal condition loss dominates early training because the payoff kink at $x = K$ is difficult for smooth neural networks to approximate. Final PDE residual: $2.6 \times 10^{-5}$; BS price RMSE: 0.036 (3.6 cents average pricing error).
-
-#### 7.1.4 DDPM
-
-Train loss decreased steadily from 0.099 to $8.9 \times 10^{-5}$ over 1,000 epochs. Validation RMSE improved from 0.01267 (epoch 100) to 0.00706 (epoch 900, best). Test RMSE: 0.0029.
-
-The test RMSE being better than validation is explained by the test set (2021) having lower overall IV than the validation period, making surfaces easier to generate.
+> Results removed. Will be regenerated after retraining with updated condition_dim=11.
 
 ### 7.2 Round 2: Extended Dataset with Transfer Learning (2014–2026)
 
@@ -578,7 +564,7 @@ The test RMSE being better than validation is explained by the test set (2021) h
 
 All five models were retrained on the extended 480,194-row dataset with transfer learning from Round 1 checkpoints. Key modifications:
 - Training period extended to 2014–2024; test period 2025–2026.
-- 9 enhancement features added to Adjustment and DDPM condition vectors.
+- 6 enhancement features added to Adjustment model, 7 to DDPM condition vectors.
 - Transfer learning with differential learning rates (pretrained: $\eta \times 0.1$, new: $\eta$).
 
 #### 7.2.2 Base Model
@@ -589,64 +575,37 @@ Trained for 105/2000 epochs. Best validation loss 1.914 at epoch 55.
 
 Test results: TV-RMSE 0.0120 (**10.4% improvement** from Round 1), MAPE 33.0% (**25.2% improvement**), IV-RMSE 0.219. Calendar violations: 53.3%; butterfly violations: 83.7%.
 
-#### 7.2.3 HyperIV
+#### ⚠️ 7.2.3 HyperIV — *Pending retraining*
 
-Converged in 69 epochs with transfer learning (best at some early epoch, early stopped). Test results: TV-RMSE 0.0056 (**24.3% improvement** from Round 1), MAPE 20.0% (**3.4% improvement**), IV-RMSE 0.113.
+> Results removed. Will be regenerated after retraining.
 
-The fast convergence (69 epochs) confirms that transfer learning from pretrained weights significantly accelerates training compared to random initialization.
+#### ⚠️ 7.2.4 DGM — *Pending retraining*
 
-#### 7.2.4 DGM
+> Results removed. Will be regenerated after retraining.
 
-Full 5,000 epochs. Best PDE residual: $2.0 \times 10^{-5}$ (**23% improvement**); BS price RMSE: 0.0358. Since DGM is a domain-independent PDE solver, the improvement comes primarily from better initialization via transfer learning.
+#### ⚠️ 7.2.5 DDPM — *Pending retraining*
 
-#### 7.2.5 DDPM
+> Results removed. Will be regenerated after retraining with condition_dim=11 (vixtwn_change removed).
 
-1,000 epochs with condition dimension expanded from 4 to 13. Best validation RMSE: 0.0049 at epoch 400 (**31% improvement** over Round 1 validation). Test surface RMSE: 0.0072.
+#### ⚠️ 7.2.6 Adjustment Model — *Pending retraining*
 
-The 13-dimensional conditioning provides richer market context, enabling the denoiser to generate more informed surfaces. The higher test RMSE compared to Round 1 (0.0072 vs. 0.0029) reflects the greater difficulty of the 2025–2026 test period, which contains market regimes not well-represented in training.
+> Results removed. Will be regenerated after retraining with 12 input features (vixtwn_change removed, was 13).
+>
+> **Known issue (retained):** The `prepare_adjustment_data()` function runs the base model's forward pass with `autograd.grad(create_graph=True)` on all data points. The mitigation is chunked inference (5,000 rows per batch), implemented in `dataset.py`.
 
-#### 7.2.6 Adjustment Model
+### ⚠️ 7.3 Comprehensive Model Comparison — *Pending retraining of Models 2-5*
 
-1,000 epochs on CPU (~46 hours). Best validation loss: 14,442 (epoch ~980). Test RMSE: 52.20, MAPE: 70.15%.
+#### 7.3.1 Base Model Cross-Round Comparison (Current)
 
-The high MAPE reflects the model's role as a multiplicative correction factor: it predicts adjustment ratios near 1.0, where small absolute errors produce large percentage errors. This is a metric artifact rather than a model failure — the RMSE of 52.20 is in the scale of raw prediction residuals.
+| Metric | Base R1 | Base R2 | $\Delta$ |
+|--------|---------|---------|----------|
+| TV-RMSE | 0.0134 | 0.0120 | -10.4% |
+| MAPE | 44.1% | 33.0% | -25.2% |
+| IV-RMSE | 0.209 | 0.219 | +4.8% |
 
-**CUDA OOM issue:** The `prepare_adjustment_data()` function runs the base model's forward pass with `autograd.grad(create_graph=True)` on all 463K data points. This stores three layers of computation graphs simultaneously, exhausting GPU memory. The mitigation is chunked inference (5,000 rows per batch), which has since been implemented but was not available during the initial training run.
+**Key observation:** TV-RMSE and MAPE improved with more data, confirming that additional training data improves generalization. IV-RMSE increased because the 2025–2026 test period has more short-maturity options where $\text{IV} = \sqrt{w/\tau}$ amplifies errors.
 
-### 7.3 Comprehensive Model Comparison
-
-#### 7.3.1 Point Prediction (Round 2, Test 2025–2026)
-
-| Model | TV-RMSE | MAPE | IV-RMSE | Primary Task |
-|-------|---------|------|---------|--------------|
-| Base (SSVI+NN) | 0.0120 | 33.0% | 0.219 | Interpolation |
-| HyperIV | **0.0056** | **20.0%** | **0.113** | Interpolation |
-| **Improvement** | **53.3%** | **39.4%** | **48.4%** | |
-
-HyperIV's superiority stems from per-surface specialization: generating unique weights for each day means the model adapts to the specific shape of that day's IV surface rather than learning a single average mapping across all days.
-
-#### 7.3.2 Cross-Round Comparison
-
-| Metric | Base R1 | Base R2 | $\Delta$ | HyperIV R1 | HyperIV R2 | $\Delta$ |
-|--------|---------|---------|----------|------------|------------|----------|
-| TV-RMSE | 0.0134 | 0.0120 | -10.4% | 0.0074 | 0.0056 | -24.3% |
-| MAPE | 44.1% | 33.0% | -25.2% | 20.7% | 20.0% | -3.4% |
-| IV-RMSE | 0.209 | 0.219 | +4.8% | 0.076 | 0.113 | +48.7% |
-
-**Key observations:**
-- TV-RMSE improved for both models with more data, confirming that additional training data improves generalization.
-- Base model MAPE improved dramatically (44.1% → 33.0%), indicating the extended dataset reduced near-ATM prediction errors.
-- IV-RMSE increased for both models. This is a mathematical artifact: IV = $\sqrt{w/\tau}$, and the 2025–2026 test period has more short-maturity options (small $\tau$) where the division amplifies errors. This does not indicate model degradation.
-
-#### 7.3.3 All Five Models Summary
-
-| Model | Task | Key Metric | Training Time | Device |
-|-------|------|------------|---------------|--------|
-| Base | Point prediction | TV-RMSE 0.0120, MAPE 33.0% | ~9h | GPU |
-| HyperIV | Point prediction | TV-RMSE 0.0056, MAPE 20.0% | ~30min | GPU |
-| DGM | PDE solving | Residual $2.0 \times 10^{-5}$, BS RMSE 0.036 | ~25min | GPU |
-| DDPM | Surface forecasting | Test RMSE 0.0072 | ~8h | GPU |
-| Adjustment | Crisis correction | RMSE 52.20, MAPE 70.15% | ~46h | CPU |
+> Full model comparison tables will be regenerated after Models 2-5 are retrained.
 
 ### 7.4 Arbitrage Violation Analysis
 
@@ -663,30 +622,17 @@ HyperIV's superiority stems from per-surface specialization: generating unique w
 
 The violations worsened from Round 1 (74%) to Round 2 (84%), reflecting the greater complexity of 2025–2026 market conditions (higher volatility, more pronounced skew).
 
-#### 7.4.2 HyperIV Constraint Behavior
+#### ⚠️ 7.4.2 HyperIV Constraint Behavior — *Pending retraining*
 
-While formal violation counts for HyperIV are not reported (the loss function penalizes violations during training but does not guarantee zero violations), the HyperIV loss includes explicit calendar ($\lambda=10$) and butterfly ($\lambda=10$) penalty terms with numerically stabilized density computation (`clamp(min=1e-8)`). Per-surface specialization inherently reduces violations because each day's model is optimized for that day's specific surface shape, avoiding the averaging artifacts that plague the ensemble base model.
+> Will be evaluated after HyperIV retraining. The HyperIV loss includes explicit calendar ($\lambda=10$) and butterfly ($\lambda=10$) penalty terms with numerically stabilized density computation.
 
-### 7.5 Effect of Enhancement Features
+### ⚠️ 7.5 Effect of Enhancement Features — *Pending retraining*
 
-The DDPM's validation RMSE improved 31% when using 13-dimensional conditioning (with 9 enhancement features) compared to 4-dimensional conditioning (base features only):
+> Enhancement feature impact will be re-evaluated after DDPM retraining with updated condition_dim=11 (vixtwn_change removed). The enhancement features (VRP, IV term slope, S&P 500 return, institutional net ratio, etc.) provide critical market context and are expected to improve conditioning quality.
 
-| Condition Dim | Val RMSE (best) | Test RMSE |
-|---------------|-----------------|-----------|
-| 4 (base) | 0.0071 | 0.0029 |
-| 13 (enhanced) | 0.0049 | 0.0072 |
+### ⚠️ 7.6 Transfer Learning Impact — *Pending retraining*
 
-The validation improvement is clear, though the test RMSE comparison is confounded by different test periods (2021 vs. 2025–2026). The enhancement features provide critical market context: VRP captures the fear premium, IV term slope signals term structure inversion (crisis signal), S&P 500 return captures US market spillover, and institutional net ratio reflects smart money positioning.
-
-### 7.6 Transfer Learning Impact
-
-Transfer learning showed clear benefits:
-
-1. **Faster convergence:** HyperIV converged in 69 epochs vs. 58 in Round 1, despite the extended dataset being nearly twice as large. The pretrained weights provided a much better initialization than random.
-
-2. **Stability:** DGM's PDE residual improved 23% ($2.6 \times 10^{-5}$ → $2.0 \times 10^{-5}$), suggesting that pretrained weights sit in a better region of the loss landscape.
-
-3. **Dimension adaptation:** The Adjustment model's GRU input expanded from 6 to 13 features. Partial transfer (copying the 6 overlapping dimensions and Xavier-initializing the 7 new ones) allowed the model to retain its learned temporal patterns while learning new feature representations.
+> Transfer learning impact metrics will be re-evaluated after Models 2-5 are retrained. The `src/transfer.py` framework handles dimension mismatch, differential learning rates, and optional layer freezing.
 
 ---
 
@@ -742,17 +688,19 @@ We presented a comprehensive multi-model deep learning framework for implied vol
 
 Our key findings are:
 
-1. **HyperIV is the clear winner for point prediction**, achieving 53% lower TV-RMSE and 39% lower MAPE than the physics-informed base model. Per-surface specialization via hypernetwork-generated weights fundamentally outperforms fixed-weight models that must average across all market states.
+> ⚠️ Findings 1, 3, 4, 6 below reference Model 2-5 results that are pending retraining. They will be updated with fresh numbers after retraining.
+
+1. **HyperIV is the clear winner for point prediction** *(pending revalidation)*. Per-surface specialization via hypernetwork-generated weights fundamentally outperforms fixed-weight models that must average across all market states.
 
 2. **More training data significantly improves generalization.** Expanding from 254K to 480K observations and 7 to 12 years of history reduced the base model's MAPE by 25% — a substantial improvement from data alone.
 
-3. **Transfer learning with differential learning rates enables efficient model adaptation.** Models converge faster from pretrained weights, and partial weight transfer handles dimension mismatches gracefully when new features are added.
+3. **Transfer learning with differential learning rates enables efficient model adaptation** *(pending revalidation)*. The framework supports partial weight transfer for dimension mismatches and differential learning rates.
 
-4. **Enhancement market features improve diffusion model forecasting by 31%.** Conditioning on VRP, IV term slope, S&P 500 returns, and other market features provides the diffusion model with richer context about the current market regime.
+4. **Enhancement market features improve diffusion model forecasting** *(pending revalidation)*. Conditioning on VRP, IV term slope, S&P 500 returns, and other market features provides richer context about the current market regime.
 
 5. **Arbitrage constraint enforcement remains an open challenge.** Despite explicit penalty terms, the base model exhibits 84% butterfly violations, highlighting the difficulty of combining parametric models with neural network optimization.
 
-6. **DDPM produces coherent full-surface forecasts.** Unlike point prediction models that predict each grid point independently, the diffusion model generates mutually consistent 200-point surfaces with test RMSE of 0.0072.
+6. **DDPM produces coherent full-surface forecasts** *(pending revalidation)*. Unlike point prediction models that predict each grid point independently, the diffusion model generates mutually consistent 200-point surfaces.
 
 ### 9.2 Future Work
 
@@ -870,7 +818,7 @@ early_stopping_patience = 50
 [diffusion]
 unet_channels = 64,128,256
 timesteps = 1000
-condition_dim = 13
+condition_dim = 11
 ```
 
 Comma-separated lists (e.g., `hidden_sizes`, `unet_channels`, `loss_weights`) are parsed by a shared `parse_list_config()` utility that converts them to typed Python lists. Date strings in `YYYYMMDD` format are parsed by `parse_date()`. This convention allows the configuration to remain a flat text file while supporting complex structured values.
@@ -1012,7 +960,7 @@ Violation rates are reported as percentages and serve as important qualitative m
 
 The `src/transfer.py` module implements a practical transfer learning framework that handles the real-world complication of changing model architectures between training rounds:
 
-**Partial weight transfer with dimension mismatch handling.** When loading a pretrained checkpoint into a model with different layer sizes (e.g., GRU input changing from 6 to 13 features), the system:
+**Partial weight transfer with dimension mismatch handling.** When loading a pretrained checkpoint into a model with different layer sizes (e.g., GRU input changing from 6 to 12 features), the system:
 1. Identifies parameters where shapes match — copies directly
 2. Identifies parameters where shapes differ — initializes with Xavier uniform, then copies the overlapping submatrix from the pretrained weights
 3. Returns sets of `(transferred_params, reinitialized_params)` for downstream use

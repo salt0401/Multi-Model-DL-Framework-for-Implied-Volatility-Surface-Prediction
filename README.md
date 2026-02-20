@@ -57,7 +57,7 @@ The loss function has six components: (1) fit the observed data (RMSE), (2) stay
 
 The architecture uses LSTM-like "S-layers" with gating mechanisms — these help the network learn the complex nonlinear interactions between time, stock price, and volatility.
 
-**Results (2025-2026 test):** Final PDE residual 2.0e-5 (near-perfect equation satisfaction), BS price RMSE 0.036 (3.6 cents average pricing error)
+**Results:** Pending retraining with latest codebase.
 
 ### 3. Adjustment Model: GRU + Attention for Crisis Periods
 
@@ -69,7 +69,7 @@ The architecture uses LSTM-like "S-layers" with gating mechanisms — these help
 
 The output is a multiplicative adjustment ratio: `adjusted_prediction = base_prediction * ratio`. Training uses KDE-weighted loss (Kernel Density Estimation) to focus on rare extreme events — otherwise the model would optimize only for normal conditions and ignore crises, which is exactly when corrections matter most.
 
-**Results (2025-2026 test):** Test RMSE 52.20, MAPE 70.15% (1000 epochs). The high MAPE reflects that adjustment ratios are close to 1.0, where small absolute errors produce large percentage errors.
+**Results:** Pending retraining. This model depends on Model 1 outputs and needs retraining with the updated 12-feature input (vixtwn_change removed).
 
 ### 4. HyperIV: Hypernetwork (State-of-the-Art)
 
@@ -85,7 +85,7 @@ The output is a multiplicative adjustment ratio: `adjusted_prediction = base_pre
 
 The key insight is that the hypernetwork doesn't predict IV directly — it predicts the *parameters of another neural network* that predicts IV. This means every day gets its own specialist predictor, automatically adapted to that day's unique market conditions.
 
-**Results (2025-2026 test):** TV-RMSE 0.0056, MAPE 20.0%, IV-RMSE 0.113 (best point prediction — **53% lower error** than the base model)
+**Results:** Pending retraining with latest codebase.
 
 ### 5. DDPM: Diffusion Model for Surface Forecasting
 
@@ -99,54 +99,123 @@ The key insight is that the hypernetwork doesn't predict IV directly — it pred
 
 2. **Generation:** Start from pure random noise and apply the trained denoiser 1000 times. Each step removes a little noise, gradually revealing a realistic IV surface conditioned on the input market features.
 
-The architecture is a **1D U-Net** (encoder-decoder with skip connections). Conditioning on 13 market features (underlying price, VIX, volume, returns, plus enhancement features like S&P 500, synthetic Taiwan VIX, term structure slope, variance risk premium, and realized volatility) is done via **FiLM layers** (Feature-wise Linear Modulation) — these tell the denoiser "generate a surface that looks like what the market should produce given these conditions."
+The architecture is a **1D U-Net** (encoder-decoder with skip connections). Conditioning on 11 market features (today's surface summary + VIX level, VIX change, underlying return, realized volatility, S&P 500 return, IV term slope, IV skew, variance risk premium, futures basis, institutional positioning) is done via **FiLM layers** (Feature-wise Linear Modulation) — these tell the denoiser "generate a surface that looks like what the market should produce given these conditions."
 
 **Key advantage over point prediction:** The diffusion model generates *coherent* surfaces where all 200 grid points are mutually consistent. Point prediction models (Base, HyperIV) predict each point independently, which can create internal inconsistencies.
 
-**Results (2025-2026 test):** Val surface RMSE 0.0049, Test surface RMSE 0.0072
+**Results:** Pending retraining with updated condition_dim=11 (vixtwn_change removed).
 
 ## Results Summary
 
-Two rounds of experiments were conducted:
-- **Round 1:** Train on 2014-2020 (254K rows), test on 2021
-- **Round 2:** Train on 2014-2024 (480K rows), test on 2025-2026 — with transfer learning and enhanced market features
+> **Status (2026-02-20):** Only Model 1 (SSVI+NN) results are current. Models 2-5 require retraining — see `EXPERIMENT.md` for details.
 
-### Point Prediction (Interpolation)
+### Model 1 (Base SSVI+NN) — Current
 
-| Model | TV-RMSE (R1 / R2) | MAPE (R1 / R2) | IV-RMSE (R1 / R2) |
-|-------|-------------------|-----------------|-------------------|
-| Base (SSVI+NN) | 0.0134 / **0.0120** | 44.1% / **33.0%** | 0.209 / 0.219 |
-| HyperIV | 0.0074 / **0.0056** | 20.7% / **20.0%** | 0.076 / 0.113 |
+| Metric | Round 1 (2021 test) | Round 2 (2025-26 test) | Change |
+|--------|---------------------|------------------------|--------|
+| TV-RMSE | 0.0134 | **0.0120** | -10.4% |
+| MAPE | 44.1% | **33.0%** | -25.2% |
+| IV-RMSE | 0.209 | 0.219 | +4.8% |
 
-HyperIV consistently outperforms the base model — **53% lower TV-RMSE** and **39% lower MAPE** in Round 2.
+### Models 2-5 — Pending Retraining
 
-### All Five Models (Round 2, 2025-2026 Test)
+| Model | Task | Status |
+|-------|------|--------|
+| HyperIV | Point prediction (SOTA) | Needs retraining |
+| DGM | PDE solving | Needs retraining |
+| Adjustment | Crisis correction | Needs retraining (12 input features, was 13) |
+| DDPM | Surface forecasting | Needs retraining (condition_dim=11, was 13) |
 
-| Model | Task | Key Metric | Training |
-|-------|------|------------|----------|
-| Base (SSVI+NN) | Point prediction | TV-RMSE: 0.0120, MAPE: 33.0% | 105 ep, ~9h GPU |
-| HyperIV | Point prediction | TV-RMSE: 0.0056, MAPE: 20.0% | 69 ep, ~30min GPU |
-| DGM | PDE solving | Residual: 2.0e-5, BS RMSE: 0.036 | 5000 ep, ~25min GPU |
-| DDPM | Surface forecasting | Test RMSE: 0.0072 | 1000 ep, ~8h GPU |
-| Adjustment | Crisis correction | Test RMSE: 52.20, MAPE: 70.15% | 1000 ep, ~46h CPU |
+### Model 1 (SSVI+NN) Training Details
+
+#### Training Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| Architecture | 5x ensemble of (SSVI + SmileModel), additive formulation |
+| SmileModel layers | 3 hidden (64 → 32 → 16), Softplus activation, LayerNorm |
+| Optimizer | AdamW, lr=0.001, gradient clip=1.0 |
+| Batch size | 256 |
+| LR schedule | MultiStepLR (gamma=0.5 every 5 epochs after epoch 500) |
+| Early stopping | Patience 50 epochs |
+| Training data | 480,194 rows (2014-2024), test on 2025-2026 |
+
+#### SSVI Learned Parameters
+
+All 5 ensemble members satisfy the Gatheral-Jacquier no-arbitrage constraint `eta*(1+|rho|) < 2`:
+
+| Member | rho | eta | gamma | GJ value | Constraint |
+|--------|-----|-----|-------|----------|------------|
+| 0 | -0.315 | 1.060 | 0.533 | 1.394 | Satisfied |
+| 1 | -0.309 | 1.069 | 0.538 | 1.400 | Satisfied |
+| 2 | -0.311 | 1.068 | 0.537 | 1.400 | Satisfied |
+| 3 | -0.309 | 1.074 | 0.540 | 1.406 | Satisfied |
+| 4 | -0.306 | 1.073 | 0.540 | 1.402 | Satisfied |
+
+The negative rho values encode the observed **left skew** in TXO options (OTM puts are more expensive than equidistant OTM calls), consistent with the volatility smile structure seen in equity markets worldwide.
+
+#### Loss Component Breakdown (Final Epoch)
+
+| Component | Weight | Value | Meaning |
+|-----------|--------|-------|---------|
+| RMSE | 1 | 0.0015 | Fit to observed data |
+| MAPE | 1 | 0.063 | Relative prediction accuracy |
+| Calendar | 10 | ~0 | No calendar arbitrage violations |
+| Butterfly | 10 | 0 | No butterfly arbitrage violations |
+| Linear (density) | 10 | 3e-6 | Smooth density in wings |
+| Upper bound | 10 | 0 | Lee's moment bound satisfied |
+
+The zero butterfly and calendar losses confirm the model produces **arbitrage-free surfaces**. This is critical for practical use — a surface with arbitrage violations implies negative probability densities, making it useless for option pricing.
+
+#### Predicted Surface Shape (tau=0.5, Slice Across Strikes)
+
+| Log-Moneyness | Total Variance | Implied Vol | Interpretation |
+|---------------|---------------|-------------|----------------|
+| -0.30 (deep OTM put) | 0.074 | 38.5% | High IV (crash protection premium) |
+| -0.20 | 0.060 | 34.6% | |
+| -0.10 | 0.054 | 32.8% | |
+| 0.00 (ATM) | 0.050 | 31.7% | Baseline volatility level |
+| +0.10 | 0.033 | 25.7% | |
+| +0.20 | 0.028 | 23.8% | Minimum (slight right-side dip) |
+| +0.30 (deep OTM call) | 0.032 | 25.3% | Slight uptick (right-wing smile) |
+
+This shape is market-consistent: the strong left skew (38.5% vs 25.3%) reflects the well-known demand for downside protection in equity options, and the slight right-wing uptick produces the characteristic "smirk" shape.
+
+#### Test Prediction Statistics
+
+| Metric | Value |
+|--------|-------|
+| Test points | 50,310 |
+| Mean predicted TV | 0.0105 |
+| Std | 0.0114 |
+| Min / Max | 4.3e-5 / 0.129 |
+| Invalid predictions | 0 (no NaN, Inf, or negative values) |
+| **TV-RMSE** | **0.0120** |
+| **MAPE** | **33.0%** |
+| **IV-RMSE** | **0.219** |
+
+#### Architecture Decision: Additive vs Multiplicative
+
+An A/B test compared two formulations (see `logs/architecture_comparison.json`):
+
+- **Additive** `w = SSVI(logm, yATM) + yATM * NN(tau, logm)`: Stable training, converges normally
+- **Multiplicative** `w = SSVI(logm, yATM) * NN(tau, logm)`: **Explodes at epoch 2** (butterfly loss: 0 → 0.69 → 6.9, MAPE: 0.07 → 0.18 → 3.8)
+
+Root cause: the product rule creates cross-terms in butterfly constraint derivatives that amplify gradient noise. The additive formulation isolates the SSVI and NN gradients, preventing this feedback loop.
 
 ### Training Curves & Visualizations
 
 Training curve and IV surface visualizations can be regenerated from the training logs using `scripts/plot_training_curves.py`. The training logs are stored in `logs/` and results are documented in `EXPERIMENT.md`.
 
-## Key Findings
+## Key Findings (from Model 1 training)
 
 1. **More data helps significantly.** Expanding from 254K to 480K data points and 7 to 12 years of history reduced the base model's MAPE from 44.1% to 33.0% — a 25% improvement just from more training data.
 
-2. **HyperIV is the clear winner for point prediction.** Its per-surface specialization (generating unique network weights for each day) consistently outperforms the fixed-weight base model by 50%+ on TV-RMSE.
+2. **The base model has a stability problem.** SSVI parameter optimization becomes unstable after ~60 epochs on the extended dataset, causing gradient explosion. This is a fundamental challenge of combining parametric models (SSVI) with neural network optimization — the parametric part can drift into degenerate configurations. Early stopping and checkpoint saving are essential safeguards.
 
-3. **Transfer learning accelerates convergence.** HyperIV converged in just 69 epochs (vs. 58 in the original run with less data), thanks to starting from pretrained weights rather than random initialization.
+3. **Additive architecture is essential.** A/B testing confirmed that `w = SSVI + yATM * NN` is strictly superior to the multiplicative `w = SSVI * NN`. The multiplicative version explodes at epoch 2 due to product-rule cross-terms in the butterfly constraint derivatives.
 
-4. **The base model has a stability problem.** SSVI parameter optimization becomes unstable after ~60 epochs on the extended dataset, causing gradient explosion. This is a fundamental challenge of combining parametric models (SSVI) with neural network optimization — the parametric part can drift into degenerate configurations. Early stopping and checkpoint saving are essential safeguards.
-
-5. **Enhancement features matter.** Adding market features (VIX, term structure slope, variance risk premium, S&P 500 returns) improved the DDPM's validation RMSE by 31% compared to using only 4 basic features. These features give the model richer context about the current market regime.
-
-6. **IV-RMSE can be misleading.** Despite better TV-RMSE, IV-RMSE increased in Round 2 because the 2025-2026 test period has more short-maturity options. The conversion `IV = sqrt(TV / tau)` amplifies errors when tau is small — a mathematical artifact, not a model failure.
+4. **IV-RMSE can be misleading.** Despite better TV-RMSE, IV-RMSE increased in Round 2 because the 2025-2026 test period has more short-maturity options. The conversion `IV = sqrt(TV / tau)` amplifies errors when tau is small — a mathematical artifact, not a model failure.
 
 ## Project Structure
 

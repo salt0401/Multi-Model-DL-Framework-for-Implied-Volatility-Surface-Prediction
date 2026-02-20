@@ -189,7 +189,7 @@ Collocation points are re-sampled every 100 epochs via `DGMSampler`.
 
 ```
    Sequence of daily IV features
-   (batch, seq_len=20, 13 features)
+   (batch, seq_len=20, 12 features)
               |
          GRU (2 layers, 64 hidden)
               |
@@ -364,15 +364,15 @@ test_train_integration.py  10 tests   End-to-end training loops
 
 ## Training Performance Summary
 
-Results from the extended dataset experiment (train 2014-2024, test 2025-2026, transfer learning from Round 1 checkpoints). See `EXPERIMENT.md` Section 6 for full details.
+> **Status (2026-02-20):** Only Model 1 results are current. Models 2-5 require retraining. See `EXPERIMENT.md` for details.
 
-| Model | Epochs | Key Test Metric | Training Time | Device |
-|-------|--------|----------------|---------------|--------|
-| Base (SSVI+NN) | 105/2000 | TV-RMSE 0.0120, MAPE 33.0% | ~9h | GPU |
-| HyperIV | 69/500 | TV-RMSE 0.0056, MAPE 20.0% | ~30min | GPU |
-| DGM | 5000/5000 | PDE residual 2.0e-5 | ~25min | GPU |
-| DDPM | 1000/1000 | Surface RMSE 0.0072 (test) | ~8h | GPU |
-| Adjustment | 1000/1000 | RMSE 52.20, MAPE 70.15% | ~46h | CPU |
+| Model | Status | Key Test Metric | Notes |
+|-------|--------|----------------|-------|
+| Base (SSVI+NN) | **Current** | TV-RMSE 0.0120, MAPE 33.0% | 105/2000 ep, ~9h GPU |
+| HyperIV | Pending retrain | — | Independent model |
+| DGM | Pending retrain | — | Independent model |
+| Adjustment | Pending retrain | — | Depends on Model 1 (12 input features) |
+| DDPM | Pending retrain | — | condition_dim=11 |
 
 ### Known Issues
 - **Base model gradient explosion:** SSVI parameter optimization becomes unstable after ~60 epochs on extended data. Best model is saved before instability. Aggressive early stopping (patience=50) is recommended.

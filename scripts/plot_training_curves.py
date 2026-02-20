@@ -26,7 +26,7 @@ val_loss = [
 
 best_epochs = [1, 7, 16, 17]  # epochs where best model was saved
 
-out_dir = os.path.join(os.path.dirname(__file__), '..', 'LossPlot')
+out_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
 os.makedirs(out_dir, exist_ok=True)
 
 # ── Figure 1: Full training curve (log scale) ───────────────────────

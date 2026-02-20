@@ -140,7 +140,7 @@ def mock_config():
         'loss_weights': '1,1,10,10,10,10',
     }
     cfg['save_path'] = {
-        'plot_path': '../LossPlot',
+        'plot_path': '../logs',
         'model_path': '../models/MultiModel.pt',
         'dgm_model_path': '../models/DGMModel.pt',
         'adjustment_model_path': '../models/AdjustmentModel.pt',
