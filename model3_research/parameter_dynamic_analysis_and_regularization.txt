@@ -1,0 +1,139 @@
+参数级自适应正则化与深度神经网络中的记忆动力学研究报告
+在现代深度学习理论中，正则化（Regularization）的传统应用高度依赖于全局统一的超参数设置。这种范式通常对神经网络中的所有参数施加无差别的惩罚，其核心假设是所有权重对底层数据分布的贡献是均等的，且它们的最优值遵循统一的先验分布——例如， 正则化（岭回归）隐式假设参数服从全局的高斯分布（常态分布），而  正则化（Lasso回归）则隐式假设参数服从全局的拉普拉斯分布（Laplace distribution） 1。然而，随着深度神经网络参数量呈指数级增长，这种“一视同仁”的全局先验假设正面临严峻的理论挑战。
+本报告旨在深入探讨一种前沿的正则化理念：神经网络中的不同参数在训练过程中（尤其是在验证集损失停止下降但训练集损失持续下降的“过拟合阶段”）展现出截然不同的统计特性与轨迹动力学。基于这一现象，通过观察训练过程中的参数变动轨迹，将参数精确划分为“有价值的”（捕捉泛化信号）与“无价值的”（死记硬背训练噪声）两类，进而对无价值参数施加提前限制，或根据参数的动态统计特性自适应地决定使用  还是  正则化。这一构想不仅在理论上极具前瞻性，而且与当前机器学习领域中最前沿的梯度信噪比（GSNR）分析、双层元优化（Bi-level Meta-Optimization）以及自适应贝叶斯先验选择（Adaptive Bayesian Prior Selection）等研究方向高度契合 4。本报告将从损失几何学、记忆的架构分层、参数级信号分离以及动态贝叶斯先验等多个维度，对这一问题进行详尽、深度的剖析。
+一、 过拟合的动力学：损失几何学与训练相变
+为了准确理解参数在过拟合阶段的行为轨迹，必须首先解构深度神经网络的训练动力学。神经网络的训练过程并非单一的线性下降，而是表现出明显的相变（Phase Transitions），这主要体现在经验风险（训练损失）与真实风险（由验证损失近似）轨迹的分化上 7。传统机器学习的偏差-方差权衡理论在深度学习中往往表现出极其复杂的非典型特征，这要求我们对过拟合现象进行更深层次的微观审视 9。
+1. 优化阶段与正则化阶段的轨迹演化
+对深度网络梯度下降（Gradient Descent）动力学的轨迹分析表明，训练过程主要由两个截然不同的阶段构成：“优化阶段”（Optimization Phase）和“正则化阶段”（Regularization Phase） 10。在初始的优化阶段，参数轨迹在损失景观（Loss Landscape）中迅速向极小值流形（Minima Manifold）移动。此时，网络主要捕捉数据中最显著、最具泛化性的信号特征，训练损失与验证损失同步且快速地下降 7。
+当模型逐渐收敛于主要信号时，验证损失开始触底并进入平台期（Plateau）。这一拐点标志着优化阶段的结束与正则化阶段的开始。如果此时不进行干预（如早停机制），网络将利用其庞大的剩余容量（Capacity）进一步最小化经验风险。在这个阶段，网络开始“死记硬背”（Memorize）训练数据中固有的随机噪声、异常值以及虚假相关性（Spurious Correlations） 11。从宏观损失曲线上看，验证损失开始趋于平缓甚至反弹上升，而训练损失则继续渐进地逼近于零 13。从微观的参数轨迹来看，此时的权重不再向流形深处垂直下降，而是开始沿着极小值流形进行横向移动与剧烈震荡，试图在不同的小批量（Mini-batch）数据中调和相互矛盾的噪声信号 10。
+2. 曲率、权重幅度与噪声拟合的数学机制
+网络在正则化阶段“记住”噪声的具体机制，在数学上与权重幅度（Weight Magnitude）和函数曲率（Functional Curvature）存在着本质的联系 2。在包含非线性激活函数（例如 ReLU）的神经网络中，任何单个神经元的输出都可以被概念化为输入特征的复杂多项式函数 17。这些多项式的系数，是由前序网络层权重的乘积与求和所派生出来的 17。
+当网络试图拟合随机噪声时，由于随机噪声在定义上缺乏平滑的底层结构，网络映射函数必须变得高度非线性和“扭曲”（Wiggly），才能完美穿过那些偏离真实分布的异常数据点 17。从数学角度而言，要生成这种极端的局部曲率，多项式的系数（即底层的权重参数）必须在幅度上出现显著的增长 17。因为仅有具有庞大系数的多项式，才能在微小的输入区间内产生剧烈的函数值波动 17。
+因此，如果观察到某个参数在验证损失触底后，其幅度（Magnitude）突然出现加速增长或持续的高频震荡，该参数极大概率正在参与噪声记忆，而非信号提取 2。传统的全局  正则化试图通过无差别地惩罚所有权重的平方范数来压制这种现象，隐式地偏好方差较小的平滑函数 2。然而，这种“一刀切”的做法也会不可避免地惩罚那些用于定义真实决策边界的“有价值”参数，从而引发欠拟合 15。这凸显了观察特定参数轨迹并实施差异化限制的必要性。
+二、 记忆的架构分层与空间定位
+假设神经网络中所有的参数均同等程度地参与噪声记忆，是一个在拓扑结构上存在缺陷的观点。最新的研究表明，数据记忆现象在深度神经网络的架构中呈现出高度的层级分化（Stratification）与空间异质性 19。
+1. 特征学习与记忆的层级差异
+基于副本的平均场理论（Replica-based Mean Field Theory）对深度网络进行的几何分析揭示，网络中的所有层都倾向于从共享特征的样本中进行学习，这是驱动模型泛化的核心动力 19。然而，当网络被迫记忆非结构化数据或纯噪声时，这种任务被极不均匀地分配给了网络的特定部分 19。
+研究发现，记忆现象主要且压倒性地发生在网络的较深层（Deeper Layers） 19。这种架构偏差的产生，是由于随着数据在网络中的逐层前向传播，对象流形（Object Manifolds）的半径和维度在不断减小。网络的前期层（Early Layers）主要充当鲁棒的、泛化的特征提取器，它们在训练早期就已基本固定，受记忆数据的影响极小 19。相反，靠近输出端的深层网络由于接收到了高度压缩且特征解耦的表征，具备了极高的函数灵活性。为了将剩余的训练误差降至零，这些深层参数会极度扭曲决策边界，从而吸收了绝大部分的噪声 19。这也从分析力学的角度解释了，在初始化附近，置换样本（Permuted Examples，导致记忆的样本）的梯度贡献非常小，网络在训练初期自然地避免了记忆 19。
+2. 轨迹回溯与权重“擦除”技术
+记忆现象在空间上的隔离，为参数级干预提供了理论支撑。实证研究证明，通过精确识别验证损失触底的迭代周期（Epoch），并随后将网络最后几层的权重“回溯”（Reverting）或“擦除”（Zapping）到那个特定周期的状态，可以奇迹般地恢复模型的泛化能力 19。
+这种轨迹回溯技术，在概念上与早停法（Early Stopping）有渊源，但其粒度更为精细 20。重置这些特定的晚期参数，彻底消除了在训练后期为了拟合噪声而发展出的高频曲率，同时完美保留了早期层学习到的鲁棒特征表征 21。这些实验不仅证实了参数在时间轴上可以被区分为“早期收敛的泛化参数”和“晚期波动的噪声参数”，也直接验证了监控参数变动以区分“搞鬼”参数与“稳定”参数的设想是完全可行且极具实践价值的。
+三、 在参数级别区分信号与噪声的量化指标
+为了将“无价值”的噪声参数剔除或限制，必须建立严谨的数学度量，以在过拟合阶段量化识别哪些特定权重正在记忆噪声。在当前的前沿研究中，实现这一参数级区分的最稳健、最具代表性的指标是梯度信噪比（Gradient Signal-to-Noise Ratio, GSNR） 4。
+1. 梯度信噪比 (GSNR) 的动力学分析
+GSNR 提供了一种参数级的微观度量，能够持续评估某个权重是在响应一致的泛化信号，还是在批次噪声的驱使下盲目波动 4。对于网络中的任意参数 ，其 GSNR 定义为该参数梯度期望的平方与该参数梯度在数据分布  上的方差之比：
+
+GSNR 动力学的深度解读：
+高 GSNR（泛化信号 / 有价值参数）： 一个巨大的 GSNR 值表明，该参数  在不同小批量（Mini-batch）数据上计算出的梯度指向极其一致的方向 4。其分母（方差）极低，意味着该参数正在稳定地沿着损失景观下降，提取出具有普适性的数据特征 4。这些参数在验证损失触底后往往变动极小，属于高度稳定的“有价值”参数。
+低 GSNR（随机噪声 / 无价值参数）： 低 GSNR 表明该参数的梯度均值（分子）接近于零，但方差（分母）极大 4。在验证损失平台的背景下，这意味着这些参数正被个别训练样本的特异性噪声拉扯，在截然相反的方向上剧烈震荡 24。它们陷入了“盲目曲线拟合”（Blind Curve-fitting）的陷阱，产生高频振荡而对整体模型的结构优化毫无建树 25。
+理论推导和鞅论（Martingale Argument）证明，在训练中引入标签噪声或特定的梯度惩罚，能够有效压制 GSNR 较低的参数，防止噪声记忆主导学习过程，从而允许高 GSNR 的信号学习以指数级继续增长 24。此外，最新的正则化框架已经开始利用 GSNR 来构建参数级的 Dropout 掩码，选择性地丢弃那些展现出低 GSNR（即受虚假相关性驱动）的参数，从而剥夺它们影响优化轨迹的权限 27。为了进一步提高预测的准确性并平滑梯度方差，研究人员还提出了 -GSNR 等变体指标，更加精确地预测网络在初始化和训练后期的泛化表现 4。
+2. 参数敏感度与高阶曲率分析
+除了 GSNR，二阶信息（如 Hessian 矩阵）和参数敏感度分析也是区分泛化权重与记忆权重的关键工具。研究表明，网络的输入-输出雅可比（Jacobian）矩阵的范数与泛化能力高度相关；过拟合的模型对输入微小扰动表现出极高的脆弱性 29。
+在过拟合阶段，负责记忆特定样本噪声的权重会变得异常敏感。权重微扰敏感度分析揭示，那些专门用于记忆的参数一旦发生微小改变，便会导致损失景观的剧烈波动（对应于 Hessian 矩阵的极大特征值）；而致力于泛化的参数则驻留于极小值流形的宽阔、平坦区域中（对应于极小的特征值） 10。这种参数级别的曲率异质性，为动态正则化提供了明确的靶点。
+四、 超越全局先验：动态与参数级自适应正则化范式
+一旦认识到神经网络内部不同参数承载着完全不同的统计功能，继续依赖静态、标量的全局超参数进行正则化就显得极不合理。如果将正则化视为一种强加的先验分布（Prior Distribution），那么迫使所有参数服从同一个先验分布（无论是均值为零的高斯分布还是拉普拉斯分布）必然会严重束缚模型的表达能力 1。目前最先进的算法通过跟踪每个单独参数的实时训练轨迹，动态地调整正则化的类型和强度，完美地契合了区分有价值与无价值参数的设想。
+1. 自适应权重衰减 (Adaptive Weight Decay, AdaDecay)
+标准的权重衰减（即全局  正则化）在整个优化过程中对所有参数施加恒定的衰减率，这种无差别的攻击同时压制了信号权重和噪声权重 31。为了解决这一困境，研究界开发了自适应权重衰减算法，为每个参数独立计算并动态分配  惩罚力度 32。
+在自适应框架中，正则化强度会根据分类损失梯度与正则化损失梯度的博弈强度进行“实时（On-the-fly）”调节 33。具体而言，诸如 AdaDecay 这样的方法，通过评估模型当前状态与观测数据之间的“残差”（Residual）或是该参数自身的梯度幅度，来按比例确定每个参数的正则化程度 32。
+通过利用 Sigmoid 函数或指数移动平均（Exponential Moving Average）来缩放衰减率，AdaDecay 能够精准地对那些展现出混沌、高幅度梯度（即正在拟合噪声）的参数施加极其严厉的惩罚；同时，对于那些正在稳步下降并捕捉信号的参数，则大幅放宽惩罚限制 32。这种机制在微观层面上执行了对“无价值参数”变动的严格限制，显著增强了模型对抗标签噪声和对抗性样本的鲁棒性。
+2. 交叉正则化与基于验证集轨迹的调优 (Cross-Regularization)
+在所有动态正则化方案中，交叉正则化（Cross-Regularization） 的设计理念最直接地响应了监控验证损失平台期的构想 36。
+传统的超参数调优需要在设定固定惩罚的情况下训练成百上千个模型。而交叉正则化则打破了这一常规，将优化过程在角色上进行了彻底的拆分 36。在这一框架下，训练数据（Training Data）被纯粹用于指导模型的特征学习（即更新网络权重 ）；而验证数据（Validation Data）则被专门用来计算梯度，以动态塑造控制模型复杂度的正则化参数（） 36。
+其更新规则的数学表达为：
+
+因为正则化参数是通过在验证损失上进行梯度下降来更新的，网络能够有机地、自动化地平衡自身的复杂度 36。如果在训练的某一个 Epoch，某一特定的参数子集开始拟合训练噪声，那么验证损失必然会产生向上的正向梯度。交叉正则化框架能够敏锐地捕捉到验证损失的这一恶化趋势，并自动、针对性地增加这些特定参数的正则化约束，从而掐断它们过拟合的苗头 36。这种方法在单次训练运行中即可收敛至交叉验证的最优解，不仅解决了计算效率问题，更实现了利用验证集的动态反馈来决定参数去留的深度设想 36。
+五、 元优化框架：在  与  正则化之间的动态博弈
+在验证损失触底、训练损失继续下降时，除了单纯地限制参数变动，是否能够根据参数的统计特性动态决定对其应用  正则化（促使参数稀疏化、变为绝对的零）还是  正则化（促使参数衰减但不为零）？这一设想已被证明高度可行，其核心实现路径被称为元正则化选择（Meta-Regularization Selection） 5。
+1. 双层优化问题 (Bi-level Optimization)
+元正则化选择将正则化类型及其强度的分配，构建为一个极其精妙的嵌套双层优化问题 5。
+内层循环 (Inner Loop): 专注于利用训练数据更新神经网络参数 。它在最小化训练损失的同时，加上当前选定的各种正则化策略集合 （包括 , , Dropout 等）及其权重 ：
+
+外层循环 (Outer Loop): 利用在验证集上计算的元损失（Meta-loss），对各种正则化策略的强度  进行梯度更新：
+
+通过这种双层嵌套机制，网络能够在其整个生命周期中持续评估：哪种正则化策略对哪个参数是最优的 5。例如，如果某个层中包含大量 GSNR 极低、完全沦为噪声吸收器的“无价值”参数，元优化器会在外层循环中发现：如果对这些参数应用  正则化，它们仍会保留微小的非零值继续干扰输出；而如果改用  正则化，则能将它们的容量彻底清零，从而使验证损失大幅下降。因此，框架会自动将这些参数的惩罚从  切换至 ，强制执行稀疏性以剥夺其记忆能力 5。反之，对于那些捕获密集连续信号的有价值参数，框架会自然倾向于保留  惩罚以防止过度收缩导致特征丢失 2。
+2. 矩阵变量先验与权重相关性 (AdaReg 算法)
+单纯的  和  正则化依然存在一个隐蔽的统计学盲点：它们均假设网络中的参数是独立同分布的（i.i.d.）。然而，反向传播算法的链式法则决定了同一层内的权重必然高度相关。AdaReg（Adaptive Regularization of Weight Vectors）算法通过对权重矩阵施加矩阵变量正态先验（Matrix-Variate Normal Prior）巧妙地解决了这一问题 39。
+AdaReg 并不使用单一的标量  进行惩罚，而是通过克罗内克积（Kronecker Product）  来建模协方差结构，精准捕获神经元的扇入（Fan-in）和扇出（Fan-out）相关性 39。通过经验贝叶斯（Empirical Bayes）方法，这些超参数（精度矩阵）直接从数据流中实时估计得出 39。这实质上充当了一个动态的预处理矩阵，根据数据的几何流形重塑梯度的更新方向，迫使神经元共享统计强度 39。它从根本上阻止了孤立的参数擅自脱离群体去拟合局部噪声，因为每个参数的正则化惩罚都被紧密地与其相关参数群的群体轨迹相绑定 39。
+六、 贝叶斯视角下的终极解构：Spike-and-Slab 先验与自适应等级选择
+如果将正则化视为贝叶斯框架下的负对数先验概率（Negative Log-prior Probability），那么  正则化在数学上严格等价于为参数设定高斯（Normal）先验，而  正则化则严格等价于拉普拉斯（Laplace）先验 1。
+在一个高度异质化的深度神经网络中，某些参数扮演边缘检测器的角色，某些负责纹理分析，还有许多仅仅是随机初始化的冗余容量 19。强迫所有这些具备不同功能机制的参数服从单一的拉普拉斯或高斯分布，不可避免地会导致泛化信号的欠拟合与噪声的过拟合同时发生 9。为了完美契合“动态分类有价值与无价值参数，并施加极限约束”的构想，贝叶斯机器学习领域给出了其最严谨的数学解：Spike-and-Slab 先验分布 42。
+1. Spike-and-Slab 混合模型
+Spike-and-Slab 是一种专门为变量选择和参数重要性定义而设计的混合先验分布 43。它明确地将参数一分为二，由两部分组成：
+尖峰 (The Spike): 一个高度集中于零的分布（通常是狄拉克  函数，或是方差极小的高斯分布） 46。
+平板 (The Slab): 一个极其平坦、宽阔的分布（如方差极大的高斯分布），允许参数在广阔的数值区间内自由移动 42。
+在训练过程中（通常通过变分推断 Variational Inference 或期望传播 Expectation Propagation 来实现），网络持续计算每个参数隶属于“尖峰”或“平板”的后验概率 44。
+如果一个参数的轨迹表明它正在捕获一致且泛化的模式（例如表现出高 GSNR 和稳定的轨迹），网络会计算出其具有高信息价值，并将其分配给 “平板” (Slab)。此时，该参数能够摆脱标准  正则化的严苛收缩限制，自由地收敛至其最优的非零值 42。
+相反，如果一个参数的轨迹显示它仅仅是在验证损失平台期为了拟合批次噪声而产生无意义的震荡，网络会判定其预测价值极低，并将其分配给 “尖峰” (Spike)。一旦进入 Spike，该参数会被极端地驱逐至绝对的零值。这从物理上彻底限制了它的变动，完全剥夺了其容纳和记忆噪声的容量（Capacity） 43。
+这种贝叶斯方法正是所提构想在数学层面最无懈可击的实现：它在训练的各个阶段实时监控参数的统计属性，并将其果断地划分为受限阶层（Spike / 无价值的噪声记忆者）和自由阶层（Slab / 有价值的信号提取者）。近期的研究突破已经通过平均场变分推断（Mean-field Variational Inference）和动态后验探索技术，使这些复杂的层次空间模型能够扩展并应用于包含海量参数的大规模深度神经网络中 45。
+2. 自适应秩选择 (Adaptive Rank Selection) 与层次先验
+当在拥有数以亿计参数的大语言模型或庞大的卷积网络中执行全贝叶斯推断显得计算成本过高时，研究人员转向了参数高效的替代方案，如秩一贝叶斯神经网络（Rank-1 BNNs） 47。
+这类模型仅在确定性权重的低秩校正项上建模后验分布 47。为了动态监控不同维度的轨迹，引入了自适应秩选择（ARS）模块 47。ARS 模块能够连续监控低秩子空间的奇异值相对大小。通过根据训练动力学不断更新自适应的剪枝阈值，网络能够精准地“冻结”那些被噪声主导的维度，同时允许携带核心信号的维度继续自适应学习 47。
+此外，层次先验（Hierarchical Priors）的引入——即先验分布的超参数本身也从一个超先验中抽取——使得网络能够完全从数据中自我学习权重的真实分布形态 49。通过利用 Stein 梯度估计器，最小化模型假定的解释方差比例（PVE）与真实数据分布之间的 Kullback-Leibler (KL) 散度，网络能够有机地改变其参数级的分布特征，而完全不需要人类干预或静态地预先设定  或  惩罚的界限 6。
+七、 信息瓶颈、二阶导数与持续学习的启发
+在网络收敛后（或进入验证集平台期后）限制特定参数移动的理念，不仅在标准的监督学习中得到验证，更是持续学习（Continual Learning, CL）领域的核心基石。其中最著名的算法之一便是弹性权重巩固（Elastic Weight Consolidation, EWC） 51。
+当网络在主任务上完成训练，或验证损失证明核心特征已被学习时，网络就拥有了一组针对该分布优化的参数。如果此时在充满噪声的新数据上继续训练，传统网络会随意覆盖原有的有价值参数，导致灾难性遗忘（Catastrophic Forgetting）或极度过拟合 51。为了阻止这一点，EWC 计算了费舍尔信息矩阵（Fisher Information Matrix），该矩阵通过二阶导数精确测量了损失函数对每一个参数变动的敏感度 51。
+那些具有高 Fisher 信息的参数被严格界定为“极具价值”，因为对它们的哪怕最微小的扰动都会摧毁已经学习到的信号 51。EWC 会在这些已收敛的权重上附加一个以它们为中心的自适应、参数级  惩罚。这相当于在物理层面上增加了这些关键参数移动的“阻力”，极大放缓了它们的学习率。与此同时，那些 Fisher 信息极低的参数——代表冗余容量或无意义的噪声特征——则完全不受限制，可以随意改变以适应新的输入而不破坏全局结构 51。虽然 EWC 主要用于多任务序列学习，但其底层机制——即通过二阶轨迹度量跟踪参数重要性，并施加选择性正则化约束——与在单一任务过拟合阶段对参数进行靶向限制的逻辑如出一辙。
+此外，轨迹分析正在成为识别和剥离虚假相关性的核心工具 52。使用经验风险最小化（ERM）训练的模型，在被迫拟合噪声时，内在地极易吸收虚假相关性 12。为了对抗这一点，记忆感知训练（Memorization-Aware Training, MAT）被提出 54。MAT 对参数的优化轨迹进行剖析，并利用通过交叉风险最小化（Cross-Risk Minimization）预训练的辅助模型来计算留出概率 54。它通过动态重新加权特定样本和参数的损失贡献，在算法层面上明确且严厉地惩罚那些导向边缘样本记忆和弱泛化的参数轨迹 54。
+八、 总结与展望
+综上所述，关于“监控验证损失与训练损失的背离轨迹，观察参数变动以区分泛化信号与噪声记忆，进而对无价值参数施加提前限制或自适应选择 / 正则化”的设想，不仅毫无“天真”之处，反而异常精准地击中了当前深度学习最核心的痛点，高度吻合现代优化理论的最前沿发展方向。
+传统的静态、全局超参数正则化正在被淘汰。本报告中的详尽分析证实，以下几大前沿研究领域已经为您所提出的理论设想提供了强大的实证支持与数学框架：
+梯度信噪比 (GSNR) 理论： 提供了在微观层面判定参数质量的完美数学工具。它利用梯度轨迹的均值与方差，明确揭示了哪些参数在稳步捕获信号（高 GSNR），哪些参数在批次噪声中盲目波动、试图死记硬背（低 GSNR） 4。
+双层元优化与交叉正则化： 证实了利用验证集的损失表现作为反馈信号，通过梯度下降动态计算和调整每个参数的正则化惩罚（自动在  的稀疏化与  的收缩之间切换）是高度可行的系统架构 5。
+贝叶斯 Spike-and-Slab 先验： 从概率论的制高点，将参数严格分类为“受限的无价值者”（Spike）和“自由的有价值者”（Slab），不仅在理论上完美呼应了参数价值的二元对立，且在大型神经网络中已被证明具备卓越的计算可扩展性 43。
+轨迹回溯与架构几何学： 证明了记忆现象往往存在空间聚集性（主要位于深层网络），并且在验证损失触底的 Epoch 对这些波动参数进行强制重置（Zapping），能够有效挽救被噪声污染的模型泛化能力 19。
+将正则化从“全局静态先验”转变为“基于轨迹特征的参数级自适应动态约束”，代表了机器学习理论的一次重大范式转移。通过深度剥离信号收敛与噪声记忆在时间与空间轨迹上的差异特征，并在参数层面执行精准的外科手术式打击，未来的深度神经网络必将能够彻底摆脱过拟合的桎梏，实现前所未有的鲁棒性与泛化能力。
+引用的著作
+Regularization (mathematics) - Wikipedia, 檢索日期：2月 21, 2026， https://en.wikipedia.org/wiki/Regularization_(mathematics)
+How come large weights = overfitting in linear regression models? : r/datascience - Reddit, 檢索日期：2月 21, 2026， https://www.reddit.com/r/datascience/comments/c866ka/how_come_large_weights_overfitting_in_linear/
+Regularization in Machine Learning - GeeksforGeeks, 檢索日期：2月 21, 2026， https://www.geeksforgeeks.org/machine-learning/regularization-in-machine-learning/
+Unleashing the Power of Gradient Signal-to ... - CVF Open Access, 檢索日期：2月 21, 2026， https://openaccess.thecvf.com/content/ICCV2023/papers/Sun_Unleashing_the_Power_of_Gradient_Signal-to-Noise_Ratio_for_Zero-Shot_NAS_ICCV_2023_paper.pdf
+(PDF) Meta-Regularization Selection: An Optimization Framework ..., 檢索日期：2月 21, 2026， https://www.researchgate.net/publication/398036449_Meta-Regularization_Selection_An_Optimization_Framework_for_Dynamic_Regularization_in_Deep_Neural_Networks
+Informative Bayesian Neural Network Priors for Weak Signals - Euclid, 檢索日期：2月 21, 2026， https://projecteuclid.org/journals/bayesian-analysis/advance-publication/Informative-Bayesian-Neural-Network-Priors-for-Weak-Signals/10.1214/21-BA1291.pdf
+Training and Validation Loss in Deep Learning - GeeksforGeeks, 檢索日期：2月 21, 2026， https://www.geeksforgeeks.org/deep-learning/training-and-validation-loss-in-deep-learning/
+What Is Regularization? | IBM, 檢索日期：2月 21, 2026， https://www.ibm.com/think/topics/regularization
+4 – The Overfitting Iceberg - Machine Learning Blog | ML@CMU | Carnegie Mellon University, 檢索日期：2月 21, 2026， https://blog.ml.cmu.edu/2020/08/31/4-overfitting/
+On Regularization of Gradient Descent, Layer Imbalance and Flat ..., 檢索日期：2月 21, 2026， https://opt-ml.org/oldopt/papers/2020/paper_12.pdf
+The Probabilistic Origin of Regularization - Daily Dose of Data Science, 檢索日期：2月 21, 2026， https://www.dailydoseofds.com/the-origin-of-regularization/
+The Pitfalls of Memorization: When Memorization Hurts Generalization - arXiv.org, 檢索日期：2月 21, 2026， https://arxiv.org/html/2412.07684v1
+Overfitting: Interpreting loss curves | Machine Learning - Google for Developers, 檢索日期：2月 21, 2026， https://developers.google.com/machine-learning/crash-course/overfitting/interpreting-loss-curves
+Your validation loss is lower than your training loss? This is why! | Towards Data Science, 檢索日期：2月 21, 2026， https://towardsdatascience.com/what-your-validation-loss-is-lower-than-your-training-loss-this-is-why-5e92e0b1747e/
+Overfit and underfit | TensorFlow Core, 檢索日期：2月 21, 2026， https://www.tensorflow.org/tutorials/keras/overfit_and_underfit
+Use Weight Regularization to Reduce Overfitting of Deep Learning Models - MachineLearningMastery.com, 檢索日期：2月 21, 2026， https://machinelearningmastery.com/weight-regularization-to-reduce-overfitting-of-deep-learning-models/
+why large weights in a neural network are a sign of a more complex network (overfitting)? : r/deeplearning - Reddit, 檢索日期：2月 21, 2026， https://www.reddit.com/r/deeplearning/comments/ug1j99/why_large_weights_in_a_neural_network_are_a_sign/
+Why do smaller weights result in simpler models in regularization? - Cross Validated, 檢索日期：2月 21, 2026， https://stats.stackexchange.com/questions/188092/why-do-smaller-weights-result-in-simpler-models-in-regularization
+On the geometry of generalization and memorization in deep neural ..., 檢索日期：2月 21, 2026， https://openreview.net/forum?id=V8jrrnwGbuc
+Decoding Generalization from Memorization in Deep Neural Networks - arXiv, 檢索日期：2月 21, 2026， https://arxiv.org/html/2501.14687v2
+Reset It and Forget It: Relearning Last-Layer Weights Improves Continual and Transfer Learning - arXiv, 檢索日期：2月 21, 2026， https://arxiv.org/html/2310.07996v2
+Early Stopping in Deep Learning: A Simple Guide to Prevent Overfitting | by Piyush Kashyap, 檢索日期：2月 21, 2026， https://medium.com/@piyushkashyap045/early-stopping-in-deep-learning-a-simple-guide-to-prevent-overfitting-1073f56b493e
+The Weights Reset Technique for Deep Neural Networks Implicit Regularization - MDPI, 檢索日期：2月 21, 2026， https://www.mdpi.com/2079-3197/11/8/148
+How Does Label Noise Gradient Descent Improve Generalization in the Low SNR Regime? | OpenReview, 檢索日期：2月 21, 2026， https://openreview.net/forum?id=Izewdgcl8U
+Second-order receptive fields reveal multidigit interactions in area 3b of the macaque monkey | Journal of Neurophysiology | American Physiological Society, 檢索日期：2月 21, 2026， https://journals.physiology.org/doi/full/10.1152/jn.01022.2010
+How Does Label Noise Gradient Descent Improve Generalization in the Low SNR Regime?, 檢索日期：2月 21, 2026， https://neurips.cc/virtual/2025/poster/118751
+Domain Generalization Guided by Gradient Signal to Noise Ratio of Parameters - arXiv, 檢索日期：2月 21, 2026， https://arxiv.org/abs/2310.07361
+ICML Poster One-Step Generalization Ratio Guided Optimization for Domain Generalization, 檢索日期：2月 21, 2026， https://icml.cc/virtual/2025/poster/45152
+Sensitivity and Generalization in Neural Networks: an Empirical Study - Google Research, 檢索日期：2月 21, 2026， https://research.google.com/pubs/archive/46649.pdf
+Formalizing Generalization and Adversarial Robustness of Neural Networks to Weight Perturbations - NeurIPS, 檢索日期：2月 21, 2026， https://proceedings.neurips.cc/paper/2021/file/a3ab4ff8fa4deed2e3bae3a5077675f0-Paper.pdf
+(PDF) Adaptive Weight Decay for Deep Neural Networks - ResearchGate, 檢索日期：2月 21, 2026， https://www.researchgate.net/publication/335375461_Adaptive_Weight_Decay_for_Deep_Neural_Networks
+Adaptive Weight Decay for Deep Neural Networks | IEEE Journals ..., 檢索日期：2月 21, 2026， https://ieeexplore.ieee.org/document/8811458/
+Adaptive Weight Decay - Apple Machine Learning Research, 檢索日期：2月 21, 2026， https://machinelearning.apple.com/research/adaptive-weight
+Adaptive Weight Decay: On The Fly Weight Decay Tuning for Improving Robustness | OpenReview, 檢索日期：2月 21, 2026， https://openreview.net/forum?id=ScEfNWshH3B
+Adaptive Weight Decay for Deep Neural Networks - IEEE Xplore, 檢索日期：2月 21, 2026， https://ieeexplore.ieee.org/iel7/6287639/8600701/08811458.pdf
+Cross-regularization: Adaptive Model Complexity through Validation ..., 檢索日期：2月 21, 2026， https://openreview.net/forum?id=FzvKazljRc
+Spectral Adaptive Dropout: Frequency-Based Regularization for Improved Generalization, 檢索日期：2月 21, 2026， https://www.mdpi.com/2078-2489/16/6/475
+A Novel Dynamic Ensemble Learning (DEL) Framework to Combat The Dataset Shift: The Case of Loss Given Default, 檢索日期：2月 21, 2026， https://crc.business-school.ed.ac.uk/sites/crc/files/2025-03/Novel-Dynamic-Ensemble-Learning-Framework-Combat-Dataset-Shift-Case-Loss-Given-Default.pdf
+Learning Neural Networks with Adaptive Regularization - OpenReview, 檢索日期：2月 21, 2026， https://openreview.net/pdf?id=rJg-WHHeIH
+Memorization, Generalization, and Reasoning | Blog - Alex Lavaee, 檢索日期：2月 21, 2026， https://alexlavaee.me/blog/memorization-generalization-and-reasoning/
+On Priors for Bayesian Neural Networks - eScholarship, 檢索日期：2月 21, 2026， https://escholarship.org/content/qt1jq6z904/qt1jq6z904_noSplash_0bac091b3906a4edbae96b9e16bc7690.pdf
+Learning Sparse Deep Neural Networks with a Spike-and-Slab Prior - PMC, 檢索日期：2月 21, 2026， https://pmc.ncbi.nlm.nih.gov/articles/PMC8570537/
+Fast Laplace Approximation for Sparse Bayesian Spike and Slab Models - IJCAI, 檢索日期：2月 21, 2026， https://www.ijcai.org/Proceedings/16/Papers/267.pdf
+Generalized Spike-and-Slab Priors for Bayesian Group Feature Selection Using Expectation Propagation - Journal of Machine Learning Research, 檢索日期：2月 21, 2026， https://jmlr.org/papers/volume14/hernandez-lobato13a/hernandez-lobato13a.pdf
+Full article: Bayesian Lesion Estimation with a Structured Spike-and-Slab Prior, 檢索日期：2月 21, 2026， https://www.tandfonline.com/doi/full/10.1080/01621459.2023.2278201
+Spike-and-slab shrinkage priors for structurally sparse Bayesian neural networks - arXiv.org, 檢索日期：2月 21, 2026， https://arxiv.org/html/2308.09104v2
+Personalizing Low-Rank Bayesian Neural Networks Via Federated Learning - arXiv, 檢索日期：2月 21, 2026， https://arxiv.org/html/2410.14390v1
+Convolutional Neural Network Compression via Dynamic Parameter Rank Pruning - IEEE Xplore, 檢索日期：2月 21, 2026， https://ieeexplore.ieee.org/iel8/6287639/10820123/10851278.pdf
+Posterior and Variational Inference for Deep Neural Networks with Heavy-Tailed Weights - Journal of Machine Learning Research, 檢索日期：2月 21, 2026， https://jmlr.org/papers/volume26/24-0894/24-0894.pdf
+Regularized Parameter Uncertainty for Improving Generalization in Reinforcement Learning - ZORA, 檢索日期：2月 21, 2026， https://www.zora.uzh.ch/server/api/core/bitstreams/10c2e138-8b38-4a5d-9140-12ee980725b2/content
+Overcoming catastrophic forgetting in neural networks - PNAS, 檢索日期：2月 21, 2026， https://www.pnas.org/doi/10.1073/pnas.1611835114
+MemLens: Uncovering Memorization in LLMs with Activation Trajectories - arXiv, 檢索日期：2月 21, 2026， https://arxiv.org/html/2509.20909v1
+Generalization vs. Memorization in Autoregressive Deep Learning: Or, Examining Temporal Decay of Gradient Coherence - arXiv.org, 檢索日期：2月 21, 2026， https://arxiv.org/html/2509.00024v2
+THE PITFALLS OF MEMORIZATION: WHEN MEMORIZATION HURTS GENERALIZATION - OpenReview, 檢索日期：2月 21, 2026， https://openreview.net/pdf?id=vVhZh9ZpIM

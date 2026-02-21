@@ -59,17 +59,26 @@ The architecture uses LSTM-like "S-layers" with gating mechanisms — these help
 
 **Results:** Pending retraining with latest codebase.
 
-### 3. Adjustment Model: GRU + Attention for Crisis Periods
+### 3. Adjustment Model: Architecture Comparison (GRU / xLSTM / TFT)
 
 **What it does:** Detects and corrects for market crises — sudden events like the 2008 financial crash or COVID-19 that cause the IV surface to shift dramatically in ways the base model can't capture.
 
 **Why it matters:** Normal market conditions are relatively smooth, but crises cause "structural breaks" — sudden regime changes where historical patterns no longer apply. Without correction, the base model's predictions become unreliable during these periods.
 
-**How it works:** The model looks at the past 20 days of trading data (13 features per day, including base model predictions, VIX changes, S&P 500 returns, IV term structure slope, and realized volatility). A **GRU** (Gated Recurrent Unit — a type of recurrent neural network designed for sequential data) processes this time series, building up a representation of the current market regime. Then **multi-head attention** (the same mechanism used in ChatGPT) examines all 20 days and learns which past days are most relevant — for example, a sudden VIX spike 3 days ago might be more informative than gradual drift over the past week.
+**How it works:** The model looks at the past 20 days of trading data (12 features per day, including base model predictions, VIX changes, S&P 500 returns, IV term structure slope, and realized volatility). A sequence encoder processes this time series, building up a representation of the current market regime. Then **multi-head attention** examines all 20 days and learns which past days are most relevant. The output is a multiplicative adjustment ratio: `adjusted_prediction = base_prediction * ratio`. Training uses KDE-weighted loss to focus on rare extreme events.
 
-The output is a multiplicative adjustment ratio: `adjusted_prediction = base_prediction * ratio`. Training uses KDE-weighted loss (Kernel Density Estimation) to focus on rare extreme events — otherwise the model would optimize only for normal conditions and ignore crises, which is exactly when corrections matter most.
+**Architecture comparison (2026-02-21):** Three architectures were trained and compared on identical data (245K sequences, chronological split, GPU float64):
 
-**Results:** Pending retraining. This model depends on Model 1 outputs and needs retraining with the updated 12-feature input (vixtwn_change removed).
+| Metric | GRU (Baseline) | xLSTM (mLSTM) | TFT |
+|--------|:---:|:---:|:---:|
+| **Val RMSE** | 0.1477 | **0.1414** | 0.1452 |
+| **Val MAPE** | 9.43% | **9.01%** | 9.12% |
+| Parameters | 58,689 | **39,133** | 265,281 |
+| Training Time | **41.4 min** | 311.5 min | 207.1 min |
+
+**Winner: xLSTM (mLSTM)** — 4.3% RMSE improvement over GRU baseline with fewest parameters (39K). TFT also beats baseline (+1.7%) and provides excellent interpretability via its Variable Selection Network. All three models exhibit significant overfitting (train-val gap 2.8–6.9x), which is the subject of ongoing research. See `model3_research/` for full analysis.
+
+**Results (2026-02-21):** Architecture comparison complete. xLSTM selected as best candidate. Regularization research in progress to reduce overfitting before production integration.
 
 ### 4. HyperIV: Hypernetwork (State-of-the-Art)
 
@@ -107,7 +116,7 @@ The architecture is a **1D U-Net** (encoder-decoder with skip connections). Cond
 
 ## Results Summary
 
-> **Status (2026-02-20):** Only Model 1 (SSVI+NN) results are current. Models 2-5 require retraining — see `EXPERIMENT.md` for details.
+> **Status (2026-02-21):** Model 1 (SSVI+NN) is trained and validated. Model 3 (Adjustment) architecture comparison is complete — xLSTM selected, regularization research in progress. Models 2, 4, 5 require retraining. See `EXPERIMENT.md` for details.
 
 ### Model 1 (Base SSVI+NN) — Current
 
@@ -117,13 +126,20 @@ The architecture is a **1D U-Net** (encoder-decoder with skip connections). Cond
 | MAPE | 44.1% | **33.0%** | -25.2% |
 | IV-RMSE | 0.209 | 0.219 | +4.8% |
 
-### Models 2-5 — Pending Retraining
+### Model 3 (Adjustment) — Architecture Comparison Complete
+
+| Architecture | Val RMSE | Val MAPE | Params | Status |
+|-------------|:---:|:---:|:---:|--------|
+| xLSTM (mLSTM) | **0.1414** | **9.01%** | 39K | **Best** — regularization research in progress |
+| TFT | 0.1452 | 9.12% | 265K | Complete — excellent interpretability |
+| GRU (baseline) | 0.1477 | 9.43% | 59K | Complete — baseline reference |
+
+### Models 2, 4, 5 — Pending Retraining
 
 | Model | Task | Status |
 |-------|------|--------|
 | HyperIV | Point prediction (SOTA) | Needs retraining |
 | DGM | PDE solving | Needs retraining |
-| Adjustment | Crisis correction | Needs retraining (12 input features, was 13) |
 | DDPM | Surface forecasting | Needs retraining (condition_dim=11, was 13) |
 
 ### Model 1 (SSVI+NN) Training Details
@@ -251,6 +267,12 @@ scripts/
   inspect_ssvi_params.py    # SSVI parameter inspection
   diagnose_rho_gradient.py  # Per-loss rho gradient analysis
   train_diagnose.py         # Training with per-epoch parameter tracking
+model3_research/        # Model 3 architecture comparison & overfitting research
+  README.md             # Training results, 3-way comparison, benchmarks
+  xlstm_adjustment.py   # xLSTM (mLSTM) adjustment model
+  tft_adjustment.py     # Temporal Fusion Transformer adjustment model
+  train_models.py       # Unified training script (--model xlstm|tft|baseline)
+  overfitting_research/ # Overfitting analysis and regularization research
 docs/
   research_report.md    # Full research paper (1200 lines)
   discussion_notes.md   # Issue tracking and resolution log

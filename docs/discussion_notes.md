@@ -1,6 +1,6 @@
 # SSVI Model Discussion Notes
 
-> Last updated: 2026-02-20
+> Last updated: 2026-02-21
 
 ---
 
@@ -12,6 +12,16 @@
 - **File**: `src/model.py` lines 40-41
 - **Reasoning**: Gatheral & Jacquier (2014) no-butterfly-arbitrage condition requires `eta * (1 + |rho|) < 2`. Bounded parameterization prevents violation.
 - **Note**: The joint constraint `eta * (1 + |rho|) < 2` is not strictly enforced yet. Currently eta < 2 independently and rho < 0 independently. This is sufficient for now but could be tightened.
+
+---
+
+### ~~1.7 Model 3 architecture comparison~~ → Resolved (2026-02-21)
+- **Problem**: GRU baseline may not be optimal for seq_len=20 crisis adjustment task
+- **Research**: Evaluated 7+ architectures (TFT, xLSTM, Mamba, Neural SDE, PatchTST, iTransformer, Foundation Models). Selected TFT and xLSTM for implementation.
+- **Training**: All three models trained on identical data (245K sequences, chronological split, GPU float64)
+- **Result**: xLSTM (mLSTM) wins — 4.27% RMSE improvement over GRU, fewest parameters (39K). TFT also beats baseline (+1.7%) with excellent interpretability.
+- **Files**: `model3_research/xlstm_adjustment.py`, `model3_research/tft_adjustment.py`, `model3_research/train_models.py`
+- **Full analysis**: `model3_research/README.md`, `model3_research/full_research_report.md`
 
 ---
 
@@ -33,6 +43,15 @@ The `prs_dataset_full` dataset extends from 2014-2021 to 2014-2026. The 2014-202
 - Short-expiry option filtering or special treatment
 - Extreme value handling (IV > 100% clipping or removal)
 - Possible domain adaptation for the different data regimes
+
+### 3.7 Model 3 overfitting (train-val gap 2.8–6.9x)
+- **Problem**: All three Model 3 architectures show significant train-val gap. TFT is worst (6.9x) despite best train loss. Gap means model capacity is wasted memorizing training noise instead of learning generalizable patterns. Regularization could push the val loss floor lower.
+- **Research directions**:
+  1. **Parameter Drift Analysis** (original idea) — Track |θ(t) - θ*| after val loss bottoms out. Classify parameters as stable (signal) vs drifting (noise memorizers). Apply targeted L1/L2 regularization based on parameter distribution statistics.
+  2. **Cautious Weight Decay (CWD)** — ICLR 2026 (arXiv:2510.12402). One-line modification to AdamW: only apply decay when optimizer update and parameter sign align. Zero new hyperparameters.
+  3. **Constrained Parameter Regularization (CPR)** — NeurIPS 2024. Per-parameter-matrix adaptive regularization.
+- **Status**: Research phase. Literature review complete. Implementation pending.
+- **Files**: `model3_research/overfitting_research/README.md`, `model3_research/overfitting_research/cwd_notes.md`, `model3_research/parameter_dynamic_analysis_and_regularization.txt`
 
 ### 3.3 Gatheral-Jacquier joint constraint
 - Current: `eta < 2` and `rho < 0` independently.
@@ -96,3 +115,5 @@ The `prs_dataset_full` dataset extends from 2014-2021 to 2014-2026. The 2014-202
 | 2026-02-20 | Resolved §3.5: Additive architecture confirmed via 8-epoch A/B experiment (multiplicative explodes at ep2) |
 | 2026-02-20 | Resolved §3.6: Longer training not needed (val loss overfits from ep1, MAPE 7% is structural floor) |
 | 2026-02-20 | Resolved §3.4: Fixed adjustment model data leakage (random_split → chronological, KDE fit train-only) |
+| 2026-02-21 | Resolved §1.7: Model 3 architecture comparison complete (xLSTM > TFT > GRU). Full results in `model3_research/` |
+| 2026-02-21 | Added §3.7: Model 3 overfitting research (Parameter Drift Analysis, CWD, CPR) |

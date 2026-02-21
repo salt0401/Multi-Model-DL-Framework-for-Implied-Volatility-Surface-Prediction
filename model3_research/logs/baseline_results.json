@@ -1,0 +1,17 @@
+{
+  "model_type": "baseline",
+  "total_params": 58689,
+  "trainable_params": 58689,
+  "best_val_loss": 0.1638610621949428,
+  "best_epoch": 70,
+  "final_rmse": 0.14773314504009138,
+  "final_mape": 0.09434317368715102,
+  "training_minutes": 41.4,
+  "device": "cuda:0",
+  "input_dim": 12,
+  "hidden_dim": 64,
+  "epochs_run": 171,
+  "learning_rate": 0.001,
+  "batch_size": 256,
+  "timestamp": "2026-02-21T17:44:01.322630"
+}

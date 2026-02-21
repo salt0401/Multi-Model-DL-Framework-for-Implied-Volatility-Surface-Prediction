@@ -185,35 +185,86 @@ s_new = LayerNorm((1 - g) * h + z * s_prev)
 
 Collocation points are re-sampled every 100 epochs via `DGMSampler`.
 
-### Phase 3: Adjustment Model
+### Phase 3: Adjustment Model — Architecture Comparison
 
-```
-   Sequence of daily IV features
-   (batch, seq_len=20, 12 features)
-              |
-         GRU (2 layers, 64 hidden)
-              |
-   (batch, seq_len, 64) hidden states
-              |
-    TemporalAttention (4 heads)
-    Q=K=V from hidden states
-    Scaled dot-product attention
-              |
-   (batch, 64) context vector
-              |
-         Linear(64, output_dim)
-              |
-         SquarePlus activation
-         (ensures positive output)
-              |
-    Adjustment ratio or residual
-```
+Three architectures were evaluated (2026-02-21). All share the same input/output interface and prediction target.
 
 **Input features (12 dims):**
 - Base (6): vix_change, underlying_return, logm, tau, tv_pred, itm_otm
 - Enhancement (6): sp500_return, iv_term_slope, iv_skew, vrp_20d, futures_basis_pct, rv_20d
 
-**Data preparation:** The `tv_pred` feature is computed by running the trained base model on all data points. Since `SmileModel.forward()` uses `autograd.grad(create_graph=True)` for second-order derivatives, this consumes significant memory. The implementation uses **chunked inference** (5000 rows per batch) to avoid GPU OOM.
+**Data preparation:** The `tv_pred` feature is computed by running the trained base model on all data points with **chunked inference** (5000 rows per batch) to avoid GPU OOM.
+
+#### Architecture A: GRU + Attention (Baseline)
+
+```
+   (batch, seq_len=20, 12 features)
+              |
+         GRU (2 layers, 64 hidden)         [cuDNN fused kernel]
+              |
+   (batch, seq_len, 64) hidden states
+              |
+    TemporalAttention (4 heads)
+              |
+   (batch, 64) context vector
+              |
+         Linear(64, 1) → SquarePlus
+              |
+    Adjustment ratio                        [58,689 params]
+```
+
+#### Architecture B: xLSTM (mLSTM) + Attention (Winner)
+
+```
+   (batch, seq_len=20, 12 features)
+              |
+         mLSTM (matrix memory, QKV)         [sequential scan, memory-bound]
+         - Exponential gating
+         - Matrix memory C (d×d)
+         - Covariance update: C_t = f_t * C_{t-1} + v_t * k_t^T
+              |
+   (batch, seq_len, 64) hidden states
+              |
+    TemporalAttention (4 heads)
+              |
+   (batch, 64) context vector
+              |
+         Linear(64, 1) → SquarePlus
+              |
+    Adjustment ratio                        [39,133 params]
+```
+
+#### Architecture C: Temporal Fusion Transformer (TFT)
+
+```
+   (batch, seq_len=20, 12 features)
+              |
+    Variable Selection Network (VSN)
+    - Softmax gating per timestep
+    - Learns feature importance dynamically
+              |
+    Gated Residual Networks (GRN)
+    - ELU + skip connections + gate
+              |
+    LSTM Encoder (2 layers, 64 hidden)
+              |
+    Interpretable Multi-Head Attention (4 heads)
+    - Shared V weights (interpretable)
+              |
+    Position-wise Feed-Forward
+              |
+    SquarePlus → Adjustment ratio           [265,281 params]
+```
+
+#### Comparison Results
+
+| Metric | GRU | xLSTM | TFT |
+|--------|:---:|:---:|:---:|
+| Val RMSE | 0.1477 | **0.1414** | 0.1452 |
+| Params | 59K | **39K** | 265K |
+| Training | **41 min** | 312 min | 207 min |
+
+**Selection: xLSTM (mLSTM)** — best accuracy with fewest parameters. GRU is fastest (cuDNN kernel) but worst accuracy. TFT provides excellent interpretability via VSN feature importance.
 
 **Three prediction modes:**
 1. `ratio` — multiplicative: `adjusted_IV = base_IV * ratio`
@@ -221,6 +272,8 @@ Collocation points are re-sampled every 100 epochs via `DGMSampler`.
 3. `direct` — replace: `adjusted_IV = prediction`
 
 > **Data leakage fix (2026-02-20):** The original `train_adjustment.py` used `random_split`, causing temporal leakage. Now uses chronological split + KDE fitted on train targets only. See `discussion_notes.md` §3.4.
+
+> **Overfitting research (2026-02-21):** All three architectures show significant train-val gap (2.8–6.9x). Research directions: Parameter Drift Analysis, Cautious Weight Decay (CWD), Constrained Parameter Regularization (CPR). See `model3_research/overfitting_research/`.
 
 ### Phase 4: HyperIV
 
@@ -364,14 +417,16 @@ test_train_integration.py  10 tests   End-to-end training loops
 
 ## Training Performance Summary
 
-> **Status (2026-02-20):** Only Model 1 results are current. Models 2-5 require retraining. See `EXPERIMENT.md` for details.
+> **Status (2026-02-21):** Model 1 results are current. Model 3 architecture comparison is complete. Models 2, 4, 5 require retraining.
 
 | Model | Status | Key Test Metric | Notes |
 |-------|--------|----------------|-------|
 | Base (SSVI+NN) | **Current** | TV-RMSE 0.0120, MAPE 33.0% | 105/2000 ep, ~9h GPU |
+| Adjustment (xLSTM) | **Arch. comparison done** | Val RMSE 0.1414, MAPE 9.01% | 39K params, regularization research ongoing |
+| Adjustment (TFT) | **Arch. comparison done** | Val RMSE 0.1452, MAPE 9.12% | 265K params, excellent interpretability |
+| Adjustment (GRU) | **Arch. comparison done** | Val RMSE 0.1477, MAPE 9.43% | 59K params, baseline reference |
 | HyperIV | Pending retrain | — | Independent model |
 | DGM | Pending retrain | — | Independent model |
-| Adjustment | Pending retrain | — | Depends on Model 1 (12 input features) |
 | DDPM | Pending retrain | — | condition_dim=11 |
 
 ### Known Issues
@@ -407,3 +462,8 @@ test_train_integration.py  10 tests   End-to-end training loops
 | `scripts/inspect_ssvi_params.py` | SSVI parameter inspection |
 | `scripts/diagnose_rho_gradient.py` | Per-loss rho gradient analysis |
 | `scripts/train_diagnose.py` | Training with per-epoch parameter tracking |
+| `model3_research/xlstm_adjustment.py` | xLSTM (mLSTM) adjustment model |
+| `model3_research/tft_adjustment.py` | TFT adjustment model |
+| `model3_research/train_models.py` | Unified training script for architecture comparison |
+| `model3_research/benchmark_dtype.py` | float32 vs float64 speed benchmark |
+| `model3_research/plot_loss_curves.py` | Train/val loss curve visualization |
