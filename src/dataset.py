@@ -391,11 +391,12 @@ class DataProcessor():
         print(f'  Loaded enhancement features: {len(df)} rows, {len(df.columns)-1} features')
         return df
 
-    def prepare_adjustment_data(self, base_model, device, sequence_length=20):
+    def prepare_adjustment_data(self, base_model, device, sequence_length=20, localvol_extractor=None):
         """Prepare time-series sequences for the adjustment model.
 
         Returns padded sequences with features:
         [vix_change, underlying_return, logm, tau, tv_pred, itm_otm]
+        + optional Greeks: [local_vol, vanna, volga, lv_gradient_K]
         """
         import torch
 
@@ -434,28 +435,55 @@ class DataProcessor():
         tau_np = df[['tau']].to_numpy(dtype='float64')
         logm_np = df[['logm']].to_numpy(dtype='float64')
         yatm_np = df[['y_atm']].to_numpy(dtype='float64')
+        
+        # We also need K_norm for localvol_extractor
+        # K_norm = K / S = exp(logm)
+        knorm_np = np.exp(logm_np)
+
         n = len(df)
         tv_pred_list = []
+        
+        greeks_dict = {'local_vol': [], 'vanna': [], 'volga': [], 'lv_gradient_K': []}
+        
+        from torch import from_numpy
         for start in range(0, n, chunk_size):
             end = min(start + chunk_size, n)
             tau_t = from_numpy(tau_np[start:end]).to(device)
             logm_t = from_numpy(logm_np[start:end]).to(device)
             yatm_t = from_numpy(yatm_np[start:end]).to(device)
+            
+            # Base Model predictions
             pred, _, _, _ = base_model(tau_t, logm_t, yatm_t)
             tv_pred_list.append(pred.detach().cpu().numpy().flatten())
+            
+            # Local Vol Greeks extraction
+            if localvol_extractor is not None:
+                knorm_t = from_numpy(knorm_np[start:end]).to(device)
+                greeks = localvol_extractor.extract_features(knorm_t, tau_t)
+                for g_name in greeks_dict.keys():
+                    greeks_dict[g_name].append(greeks[g_name].cpu().numpy().flatten())
+
         df['tv_pred'] = np.concatenate(tv_pred_list)
+        
+        if localvol_extractor is not None:
+            for g_name in greeks_dict.keys():
+                df[g_name] = np.concatenate(greeks_dict[g_name])
 
         df['itm_otm'] = (df['logm'] > 0).astype(float)
         df['tv_ratio'] = df['total_var'] / (df['tv_pred'] + 1e-8)
 
         # Build sequences per option (grouped by strike + expiry)
-        # Base features + enhancement features if available
+        # Base features + enhancement features if available + Optional Greeks
         features_cols = ['vix_change', 'underlying_return', 'logm', 'tau', 'tv_pred', 'itm_otm']
         if enhance is not None:
             avail_cols = [c for c in ['sp500_return', 'iv_term_slope',
                                        'iv_skew', 'vrp_20d', 'futures_basis_pct', 'rv_20d']
                           if c in df.columns]
             features_cols = features_cols + avail_cols
+            
+        if localvol_extractor is not None:
+            features_cols = features_cols + ['local_vol', 'vanna', 'volga', 'lv_gradient_K']
+
         target_col = 'tv_ratio'
 
         df = df.dropna(subset=features_cols + [target_col])

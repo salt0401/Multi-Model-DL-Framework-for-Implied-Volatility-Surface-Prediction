@@ -22,6 +22,9 @@ sys.path.insert(0, _src_dir)
 # Add model3_research/ to import path for adjustment models
 _m3_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, _m3_dir)
+# Add model2_research/ to import path for dupire_pinn
+_m2_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'model2_research')
+sys.path.insert(0, _m2_dir)
 
 from model import MultiModel
 from dataset import DataProcessor
@@ -29,6 +32,9 @@ from adjustment import AdjustmentLoss, TVAdjustmentModel
 from utils import (load_config, parse_list_config, set_seed,
                    setup_logging, MetricsTracker, EarlyStopping,
                    compute_rmse, compute_mape)
+
+from dupire_pinn import PriceNetwork, ICNNPriceNetwork, LocalVolNetwork
+from module_d import GreekExtractor
 
 from xlstm_adjustment import xLSTMAdjustmentModel
 from tft_adjustment import TFTAdjustmentModel
@@ -267,6 +273,30 @@ def main():
     base_model.train(False)
     logger.info(f'Base model loaded from {model_path}')
 
+    # --- Step 1.5: Load Model 2 for Greek Extraction ---
+    logger.info('Loading Model 2 (ICNN Dupire) for Greek Extraction...')
+    model2_path = os.path.join(_src_dir, '..', config['save_path'].get('dupire_model_path', 'models/DupireModel.pt'))
+    if not os.path.exists(model2_path):
+        model2_path = os.path.join(_src_dir, config['save_path'].get('dupire_model_path', 'models/DupireModel.pt'))
+    
+    localvol_extractor = None
+    if os.path.exists(model2_path):
+        try:
+            state_dict = torch.load(model2_path, map_location=device, weights_only=True)
+            
+            price_net = ICNNPriceNetwork(hidden_dim=64).to(device)
+            localvol_net = LocalVolNetwork(hidden_dim=64).to(device)
+            
+            price_net.load_state_dict(state_dict['price_net'])
+            localvol_net.load_state_dict(state_dict['localvol_net'])
+            
+            localvol_extractor = GreekExtractor(price_net, localvol_net, device)
+            logger.info(f'Model 2 loaded from {model2_path}, GreekExtractor initialized.')
+        except Exception as e:
+            logger.warning(f"Could not initialize GreekExtractor: {e}. Falling back to 12-dim input.")
+    else:
+        logger.warning(f"Model 2 not found at {model2_path}. Running without Arbitrage-Free Greeks.")
+
     # --- Step 2: Prepare data ---
     logger.info('Preparing adjustment data...')
     # DataProcessor expects to be run from src/ dir for relative paths
@@ -277,7 +307,7 @@ def main():
 
     sequence_length = adj_cfg.getint('sequence_length')
     sequences, targets, masks, seq_dates = dp.prepare_adjustment_data(
-        base_model, device, sequence_length
+        base_model, device, sequence_length, localvol_extractor
     )
     os.chdir(original_cwd)
 
@@ -552,7 +582,7 @@ def main():
         if input_dim > 6:
             enhancement_features = ['sp500_return', 'iv_term_slope', 'iv_skew',
                                     'vrp_20d', 'futures_basis_pct', 'rv_20d']
-            greek_features = ['vanna_proxy', 'volga_proxy', 'lv_gradient_K']
+            greek_features = ['local_vol', 'vanna', 'volga', 'lv_gradient_K']
             all_added_features = enhancement_features + greek_features
             feature_names += all_added_features[:input_dim - 6]
 

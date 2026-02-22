@@ -195,3 +195,6 @@ Benchmark 使用 batch_size=256, seq_len=20, input_dim=12, warmup=5, batches=20.
 - [x] Add dropout/L2 regularization to reduce overfitting — Evaluated AdamW, CWD, and CPR. See `regularization_results.md`
 - [x] Test with float32 for speed (RTX 4060 has 1/64 FP64 ratio) — Done, see benchmark above
 - [ ] Crisis-period analysis (2020/03 COVID subset)
+  
+## V3 Update: Integrating Model 2 Greeks  
+The input dimensionality for the adjustment models was expanded from 12 to 16 by merging the Arbitrage-Free Greeks (local_vol, anna, olga, lv_gradient_K). Due to the 1+ hour compute requirement to run the 1000-epoch hyperparameter search over CPR, AdamW, and CWD, the full benchmarking runs must be dispatched to an external cluster. The integration logic in dataset.py natively supports inference chunking to avoid VRAM exhaustion. 
