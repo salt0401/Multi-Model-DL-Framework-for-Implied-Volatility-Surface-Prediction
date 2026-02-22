@@ -141,10 +141,16 @@ Two candidates selected for implementation:
 1. **xLSTM is the best model**: 4.3% RMSE improvement over GRU baseline, with fewest parameters (39K)
 2. **TFT also beats baseline**: 1.7% RMSE improvement, but 6.8x more parameters than xLSTM
 3. **GRU is fastest to train**: 41.4 min vs 207.1 (TFT) and 311.5 (xLSTM) — cuDNN optimized kernel
-4. **All three models overfit**: train-val gap 2.8-6.9x, regularization needed
+4. **All three models overfit**: train-val gap 2.8-6.9x. We conducted regularization experiments (AdamW, CWD, CPR) to address this — see `regularization_results.md` (and `scripts/plot_regularization_results.py`) for the full analysis.
 5. **Enhancement features contribute 47.7%** of TFT importance (iv_term_slope + rv_20d + iv_skew + vrp_20d + futures_basis_pct + sp500_return)
 6. **Temporal attention**: last timestep gets 20.3% weight, confirming recency matters most
 7. **tv_pred is the most important feature** (21.4%) — Model 1's output is the key input
+
+> **Note (2026-02-22):** Based on the regularization results, we have officially shortlisted 3 final candidate models. All other experimental checkpoints and logs have been moved to `archived_models/` and `archived_logs/` to keep the active directory clean.
+> The 3 shortlisted models are:
+> 1. `tft_cpr_fp32_AdjustmentModel.pt` (Best overall, Val=0.1521)
+> 2. `tft_adamw_fp32_AdjustmentModel.pt` (Strong runner-up, Val=0.1556)
+> 3. `baseline_cwd_AdjustmentModel.pt` (Best GRU baseline, Val=0.1582)
 
 ### float32 vs float64 Benchmark (2026-02-21)
 
@@ -185,7 +191,7 @@ Benchmark 使用 batch_size=256, seq_len=20, input_dim=12, warmup=5, batches=20.
 ---
 
 ### TODO
-- [x] ~~Train GRU baseline for 3-way comparison~~ — Done, see results above
-- [ ] Add dropout/L2 regularization to reduce overfitting
-- [x] ~~Test with float32 for speed (RTX 4060 has 1/64 FP64 ratio)~~ — Done, see benchmark above
+- [x] Train GRU baseline for 3-way comparison — Done, see results above
+- [x] Add dropout/L2 regularization to reduce overfitting — Evaluated AdamW, CWD, and CPR. See `regularization_results.md`
+- [x] Test with float32 for speed (RTX 4060 has 1/64 FP64 ratio) — Done, see benchmark above
 - [ ] Crisis-period analysis (2020/03 COVID subset)

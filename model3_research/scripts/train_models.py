@@ -17,8 +17,11 @@ import sys
 import os
 
 # Add src/ to import path for shared modules
-_src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src')
+_src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'src')
 sys.path.insert(0, _src_dir)
+# Add model3_research/ to import path for adjustment models
+_m3_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+sys.path.insert(0, _m3_dir)
 
 from model import MultiModel
 from dataset import DataProcessor
@@ -32,6 +35,7 @@ from tft_adjustment import TFTAdjustmentModel
 from optimizers import CautiousAdamW, AdamCPR
 
 from argparse import ArgumentParser
+import copy
 import torch
 from torch import optim
 from torch.utils.data import TensorDataset, DataLoader
@@ -101,6 +105,75 @@ def count_parameters(model):
     return total, trainable
 
 
+def compute_fisher_diagonal(model, data_loader, loss_fn, device, max_batches=50):
+    """Compute diagonal of Fisher Information Matrix.
+
+    Fisher diagonal F_i = E[(d loss / d theta_i)^2] measures how
+    sensitive the loss is to each parameter. High F_i = important param.
+
+    Reference: Kirkpatrick et al., PNAS 2017 (EWC)
+
+    Args:
+        model: trained model at best val loss checkpoint
+        data_loader: validation data loader
+        loss_fn: loss function
+        device: torch device
+        max_batches: cap to avoid excessive computation
+
+    Returns:
+        dict mapping param name -> Fisher diagonal tensor
+    """
+    fisher = {name: torch.zeros_like(p) for name, p in model.named_parameters()
+              if p.requires_grad}
+
+    model.train()  # need gradients
+    n_batches = 0
+    for seq_batch, target_batch, mask_batch, weight_batch in data_loader:
+        if n_batches >= max_batches:
+            break
+        seq_batch = seq_batch.to(device)
+        target_batch = target_batch.to(device)
+        mask_batch = mask_batch.to(device)
+        weight_batch = weight_batch.to(device)
+
+        model.zero_grad()
+        pred = model(seq_batch, mask_batch)
+        loss = loss_fn(pred, target_batch, weight_batch)
+        loss.backward()
+
+        for name, p in model.named_parameters():
+            if p.requires_grad and p.grad is not None:
+                fisher[name] += p.grad.detach() ** 2
+
+        n_batches += 1
+
+    # Average
+    for name in fisher:
+        fisher[name] /= max(n_batches, 1)
+
+    model.train(False)
+    return fisher
+
+
+def ewc_penalty(model, fisher, anchor_params, ewc_lambda):
+    """Compute EWC penalty: (lambda/2) * sum_i F_i * (theta_i - theta*_i)^2.
+
+    Args:
+        model: current model
+        fisher: dict of Fisher diagonal tensors
+        anchor_params: dict of parameter values at best val loss
+        ewc_lambda: penalty strength
+
+    Returns:
+        scalar penalty loss
+    """
+    penalty = 0.0
+    for name, p in model.named_parameters():
+        if name in fisher and name in anchor_params:
+            penalty += (fisher[name] * (p - anchor_params[name]) ** 2).sum()
+    return (ewc_lambda / 2) * penalty
+
+
 def main():
     parser = ArgumentParser(description='Train experimental adjustment models')
     parser.add_argument('--model', type=str, required=True,
@@ -111,6 +184,17 @@ def main():
                         help='Optimizer: adam (baseline), adamw, cwd (CautiousAdamW), cpr (AdamCPR)')
     parser.add_argument('--weight_decay', type=float, default=0.01,
                         help='Weight decay for adamw/cwd (default: 0.01)')
+    parser.add_argument('--ewc', action='store_true',
+                        help='Enable EWC Fisher L2 regularization (two-phase training)')
+    parser.add_argument('--ewc_lambda', type=float, default=1000.0,
+                        help='EWC penalty strength (default: 1000)')
+    parser.add_argument('--layer_reset', action='store_true',
+                        help='Enable periodic FC layer resetting after val plateau')
+    parser.add_argument('--layer_reset_interval', type=int, default=20,
+                        help='Reset FC every N epochs after val plateau (default: 20)')
+    parser.add_argument('--dtype', type=str, default='float64',
+                        choices=['float32', 'float64'],
+                        help='Training dtype (float32 recommended for TFT, default: float64)')
     parser.add_argument('--allow_cpu', action='store_true',
                         help='Allow CPU training (GPU required by default)')
     parser.add_argument('--epochs', type=int, default=None,
@@ -133,6 +217,9 @@ def main():
 
     use_gpu = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_gpu else "cpu")
+    train_dtype = torch.float32 if args.dtype == 'float32' else torch.float64
+    # NOTE: keep float64 as default during data prep (Model 1 is float64).
+    # We cast data & adjustment model to train_dtype AFTER preparation.
     torch.set_default_dtype(torch.float64)
 
     # --- Config ---
@@ -156,6 +243,11 @@ def main():
     logger = setup_logging(log_dir, f'{args.model}_adjustment')
     logger.info(f'=== Training {args.model.upper()} Adjustment Model ===')
     logger.info(f'Device: {device} (GPU: {torch.cuda.get_device_name(0) if use_gpu else "N/A"})')
+    logger.info(f'Dtype: {args.dtype}')
+    if args.ewc:
+        logger.info(f'EWC enabled: lambda={args.ewc_lambda}')
+    if args.layer_reset:
+        logger.info(f'Layer reset enabled: interval={args.layer_reset_interval}')
 
     # --- Step 1: Load base model ---
     logger.info('Loading base model (Model 1 SSVI+NN)...')
@@ -219,12 +311,14 @@ def main():
 
     # --- Step 5: DataLoaders ---
     train_ds = TensorDataset(
-        sequences[train_mask], targets[train_mask], masks[train_mask],
-        torch.tensor(train_kde_weights, dtype=torch.float64),
+        sequences[train_mask].to(train_dtype), targets[train_mask].to(train_dtype),
+        masks[train_mask].to(train_dtype),
+        torch.tensor(train_kde_weights, dtype=train_dtype),
     )
     val_ds = TensorDataset(
-        sequences[val_mask], targets[val_mask], masks[val_mask],
-        torch.tensor(val_kde_weights, dtype=torch.float64),
+        sequences[val_mask].to(train_dtype), targets[val_mask].to(train_dtype),
+        masks[val_mask].to(train_dtype),
+        torch.tensor(val_kde_weights, dtype=train_dtype),
     )
     loader_kwargs = {'pin_memory': True, 'num_workers': 0} if use_gpu else {}
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kwargs)
@@ -233,7 +327,7 @@ def main():
     # --- Step 6: Build model ---
     logger.info(f'Building {args.model} model...')
     model = build_model(args.model, input_dim, adj_cfg)
-    model = model.double().to(device)
+    model = model.to(train_dtype).to(device)
 
     total_params, trainable_params = count_parameters(model)
     logger.info(f'Model parameters: {total_params:,} total, {trainable_params:,} trainable')
@@ -258,9 +352,28 @@ def main():
 
     metrics = MetricsTracker()
     early_stopping = EarlyStopping(patience=100)
-    opt_suffix = f'_{args.optimizer}' if args.optimizer != 'adam' else ''
+    # Build suffix for file naming
+    suffix_parts = []
+    if args.optimizer != 'adam':
+        suffix_parts.append(args.optimizer)
+    if args.ewc:
+        suffix_parts.append('ewc')
+    if args.layer_reset:
+        suffix_parts.append('lreset')
+    if args.dtype == 'float32':
+        suffix_parts.append('fp32')
+    opt_suffix = ('_' + '_'.join(suffix_parts)) if suffix_parts else ''
     save_path = os.path.join(model_dir, f'{args.model}{opt_suffix}_AdjustmentModel.pt')
     best_val_loss = float('inf')
+
+    # EWC state (populated after Phase 1)
+    ewc_fisher = None
+    ewc_anchor = None
+    ewc_active = False  # True after Phase 1 val loss plateau
+
+    # Layer reset state
+    best_fc_state = None  # FC weights at best val epoch
+    plateau_start_epoch = None  # epoch when val loss started rising
 
     # --- Step 7: Train ---
     logger.info(f'Training: epochs={epochs}, lr={lr}, batch_size={batch_size}')
@@ -282,6 +395,11 @@ def main():
 
             pred = model(seq_batch, mask_batch)
             loss = loss_fn(pred, target_batch, weight_batch)
+
+            # Add EWC penalty if active (Phase 2)
+            if ewc_active and ewc_fisher is not None:
+                loss = loss + ewc_penalty(model, ewc_fisher, ewc_anchor,
+                                          args.ewc_lambda)
 
             optimizer.zero_grad()
             loss.backward()
@@ -315,15 +433,54 @@ def main():
         if is_best and val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(model.state_dict(), save_path)
+            # Save FC layer state for layer resetting
+            if args.layer_reset:
+                best_fc_state = {name: p.data.clone()
+                                 for name, p in model.named_parameters()
+                                 if 'fc' in name}
+                plateau_start_epoch = None  # reset plateau counter
+
+        # --- EWC: activate after first early stopping trigger ---
+        if (args.ewc and not ewc_active
+                and early_stopping.counter >= early_stopping.patience // 2):
+            # Half-patience reached: compute Fisher and start Phase 2
+            logger.info(f'EWC Phase 2: computing Fisher diagonal at epoch {epoch+1}')
+            # Load best checkpoint
+            model.load_state_dict(
+                torch.load(save_path, map_location=device, weights_only=True))
+            ewc_anchor = {name: p.data.clone()
+                          for name, p in model.named_parameters()
+                          if p.requires_grad}
+            ewc_fisher = compute_fisher_diagonal(
+                model, train_loader, loss_fn, device, max_batches=50)
+            ewc_active = True
+            # Reset early stopping for Phase 2
+            early_stopping = EarlyStopping(patience=100)
+            logger.info(f'EWC active: Fisher computed on {50} batches, '
+                        f'lambda={args.ewc_lambda}')
+
+        # --- Layer Reset: reset FC weights when val loss stagnates ---
+        if args.layer_reset and best_fc_state is not None:
+            if not is_best:
+                if plateau_start_epoch is None:
+                    plateau_start_epoch = epoch
+                elif (epoch - plateau_start_epoch) > 0 and \
+                     (epoch - plateau_start_epoch) % args.layer_reset_interval == 0:
+                    logger.info(f'Layer reset at epoch {epoch+1}: '
+                                f'reverting FC to best epoch')
+                    for name, p in model.named_parameters():
+                        if name in best_fc_state:
+                            p.data.copy_(best_fc_state[name])
 
         if (epoch + 1) % 10 == 0:
             elapsed = (datetime.now() - train_start_time).total_seconds() / 60
             current_lr = optimizer.param_groups[0]['lr']
+            ewc_str = ' [EWC]' if ewc_active else ''
             logger.info(
                 f'Epoch {epoch+1}/{epochs} - '
                 f'Train: {train_loss:.6f} - Val: {val_loss:.6f} - '
                 f'Best: {best_val_loss:.6f} - LR: {current_lr:.2e} - '
-                f'Time: {elapsed:.1f}min'
+                f'Time: {elapsed:.1f}min{ewc_str}'
             )
 
         if early_stopping.step(val_loss):
@@ -360,6 +517,10 @@ def main():
         'model_type': args.model,
         'optimizer': args.optimizer,
         'weight_decay': args.weight_decay if args.optimizer in ['adamw', 'cwd'] else None,
+        'ewc': args.ewc,
+        'ewc_lambda': args.ewc_lambda if args.ewc else None,
+        'layer_reset': args.layer_reset,
+        'dtype': args.dtype,
         'total_params': total_params,
         'trainable_params': trainable_params,
         'best_val_loss': best_val_loss,
@@ -389,12 +550,15 @@ def main():
         logger.info('Running TFT interpretability analysis...')
         feature_names = ['vix_change', 'underlying_return', 'logm', 'tau', 'tv_pred', 'itm_otm']
         if input_dim > 6:
-            feature_names += ['sp500_return', 'iv_term_slope', 'iv_skew',
-                              'vrp_20d', 'futures_basis_pct', 'rv_20d'][:input_dim - 6]
+            enhancement_features = ['sp500_return', 'iv_term_slope', 'iv_skew',
+                                    'vrp_20d', 'futures_basis_pct', 'rv_20d']
+            greek_features = ['vanna_proxy', 'volga_proxy', 'lv_gradient_K']
+            all_added_features = enhancement_features + greek_features
+            feature_names += all_added_features[:input_dim - 6]
 
         # Sample a batch for analysis
-        sample_seq = sequences[val_mask][:256].to(device)
-        sample_mask = masks[val_mask][:256].to(device)
+        sample_seq = sequences[val_mask][:256].to(train_dtype).to(device)
+        sample_mask = masks[val_mask][:256].to(train_dtype).to(device)
 
         avg_var, avg_attn = model.get_feature_importance(sample_seq, sample_mask)
         avg_var = avg_var.cpu().numpy()   # (T, J)

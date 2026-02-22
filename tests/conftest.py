@@ -143,6 +143,7 @@ def mock_config():
         'plot_path': '../logs',
         'model_path': '../models/MultiModel.pt',
         'dgm_model_path': '../models/DGMModel.pt',
+        'dupire_model_path': '../models/DupireModel.pt',
         'adjustment_model_path': '../models/AdjustmentModel.pt',
         'hyperiv_model_path': '../models/HyperIVModel.pt',
         'diffusion_model_path': '../models/DiffusionModel.pt',
@@ -158,6 +159,17 @@ def mock_config():
         'resample_every': '100',
         'n_interior': '100', 'n_boundary': '20', 'n_terminal': '20',
         'epochs': '2',
+    }
+    cfg['dupire'] = {
+        'hidden_dim': '8', 'n_layers': '2',
+        'K_min': '0.5', 'K_max': '1.5',
+        'tau_min': '0.02', 'tau_max': '2.0',
+        'n_interior': '50', 'n_boundary': '10',
+        'resample_every': '1',
+        'lambda_fit': '1.0', 'lambda_pde': '1.0',
+        'lambda_cal': '1.0', 'lambda_but': '1.0', 'lambda_smooth': '1.0',
+        'epochs': '2', 'learning_rate': '0.001',
+        'gradient_clip': '1.0', 'sigma_bs': '0.2',
     }
     cfg['adjustment'] = {
         'gru_hidden_dim': '8', 'gru_layers': '1',

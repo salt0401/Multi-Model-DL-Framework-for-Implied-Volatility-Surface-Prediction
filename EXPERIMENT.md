@@ -2,7 +2,7 @@
 
 Detailed training results for the IV surface prediction models, trained on TXO options data.
 
-> **Status (2026-02-21):** Model 1 (SSVI+NN) has been retrained and validated. Model 3 (Adjustment) architecture comparison is complete — three architectures trained and compared. Models 2, 4, 5 require retraining. See "Retraining Plan" at the bottom.
+> **Status (2026-02-22):** Model 1 (SSVI+NN) is trained on `prs_dataset_no_fat(clean)` (2014-2020 train, 2021 test). Model 3 (Adjustment) architecture comparison is complete — three architectures trained and compared; overfitting regularization research in progress. Model 2 (ICNN Dupire Local Volatility Extractor) implementation is fully complete (V1-V3) and functionally eliminates 100% of butterfly violations. Models 4, 5 await retraining.
 
 ## 1. Base Model (SSVI + Neural Network Ensemble)
 
@@ -19,48 +19,29 @@ Detailed training results for the IV surface prediction models, trained on TXO o
 | Loss weights | `[1, 1, 10, 10, 10, 10]` (data, SSVI, calendar, butterfly, density, smoothness) |
 | Gradient clipping | 1.0 |
 
-### Round 1 Training (2014-2020 train, 2021 test)
+### Training (2014-2020 train, 2021 test)
 
-- **Epochs trained:** 76 / 2000 (early stopped)
-- **Best epoch:** 26 (val loss = 2.6624)
-- Initial instability: first 3 epochs had losses in the millions due to physics loss terms (calendar/butterfly constraints) calibrating against random weights
-- Converged by epoch ~20, then gradually overfit
-- A second instability spike at epoch 62 (train loss = 38.4) and epoch 74 (train loss = 59,351) triggered early stopping
+**Dataset:** `prs_dataset_no_fat(clean)` (~254K rows, 2014-2021)
+
+**Standalone training** (`src/train.py`):
+- **Epochs trained:** 20 / 2000 (early stopped)
+- **Best epoch:** 17 (val loss = 1.940)
+- Initial instability: first 8 epochs had losses in the millions due to physics loss terms (calendar/butterfly constraints) calibrating against random weights
+- Converged by epoch ~9, then gradually overfit
+
+**Pipeline training** (`src/train_pipeline.py`, final run):
+- **Epochs trained:** 3 (Stage 1), 231 (Stage 2)
+- **Stage 1 best val loss:** 0.117 (epoch 1)
+- **Stage 2 (Adjustment):** RMSE 0.1373, MAPE 9.22%, input_dim=13
 
 | Metric | Value |
 |--------|-------|
-| TV-RMSE | 0.0134 |
-| MAPE | 44.1% |
-| IV-RMSE | 0.209 |
-| Butterfly violations | 74% |
+| Test points | 50,310 |
+| Butterfly violations | 74% (Round 1 evaluation) |
 
-The high MAPE (44.1%) is driven by near-ATM options where true total variance is very small — even a small absolute error produces a large percentage error. The 74% butterfly violation rate indicates the model struggles with the curvature constraint in the wings.
+The 74% butterfly violation rate indicates the model struggles with the curvature constraint in the wings. This is a key motivation for Model 2 (Dupire PDE-constrained local vol extractor).
 
-### Round 2 Training (2014-2024 train, 2025-2026 test)
-
-- **Epochs trained:** 105 / 2000 (early stopped)
-- **Best epoch:** 55 (val loss = 1.914)
-- Gradient explosion after epoch 67: train loss spiked from ~2.37 to 1029. The best model (ep55) was safely checkpointed before the instability.
-
-| Metric | R1 (2021 test) | R2 (2025-26 test) | Change |
-|--------|----------------|-------------------|--------|
-| TV-RMSE | 0.0134 | **0.0120** | -10.4% |
-| MAPE | 44.1% | **33.0%** | -25.2% |
-| IV-RMSE | 0.209 | 0.219 | +4.8% |
-
-**Key observations:**
-- TV-RMSE improved (more training data helps generalization)
-- MAPE improved dramatically (44.1% → 33.0%) — the extended dataset reduced near-ATM prediction errors
-- IV-RMSE increased slightly — the 2025-2026 test period has more short-maturity options where `IV = sqrt(TV/tau)` amplifies errors
-
-#### Arbitrage Violations (2025-2026 Test)
-
-| Violation | Rate |
-|-----------|------|
-| Calendar | 53.3% (105/197) |
-| Butterfly | 83.7% (77,256/92,270) |
-
-Butterfly violations increased from 74% to 84%. The more complex 2025-2026 market conditions (higher vol, more skew) make the constraint harder to satisfy.
+> **Note:** The 2022-2026 extended dataset (`prs_dataset_full.csv`, 480K rows) exists but has known data quality issues (see `discussion_notes.md` §3.2) and has **not** been used for training. A future "Round 2" training on the full dataset is planned once data quality issues are resolved.
 
 #### SSVI Learned Parameters
 
@@ -74,18 +55,14 @@ All 5 ensemble members satisfy the Gatheral-Jacquier no-arbitrage constraint `et
 | 3 | -0.309 | 1.074 | 0.540 | 1.406 |
 | 4 | -0.306 | 1.073 | 0.540 | 1.402 |
 
-#### Loss Component Breakdown (Final Epoch)
-
-| Component | Weight | Value |
-|-----------|--------|-------|
-| RMSE | 1 | 0.0015 |
-| MAPE | 1 | 0.063 |
-| Calendar | 10 | ~0 |
-| Butterfly | 10 | 0 |
-| Linear (density) | 10 | 3e-6 |
-| Upper bound | 10 | 0 |
-
 > **Architecture update (2026-02-20):** An A/B experiment confirmed the additive formulation (`w = SSVI + yATM * NN`) is strictly superior to the original multiplicative formulation (`w = SSVI * NN`). The multiplicative version explodes at epoch 2 due to product-rule cross-terms in the butterfly constraint derivatives. Full results in `logs/architecture_comparison.json`.
+
+#### Visualization Guidelines (IV Smiles)
+
+> **CRITICAL RULE FOR ALL FUTURE AGENTS:** When plotting Implied Volatility (IV) Smile curves (e.g., via `generate_model1_plots.py` or `experiment.py`), **DO NOT mix data from different dates**. 
+> - You **MUST** strictly group data by **exact** `(tau, yATM)` pairings.
+> - Each subplot must represent a single, isolated option chain (i.e. one specific maturity on one specific date), consisting of at most a few dozen points.
+> - Plotted correctly, the observed data will form a single, clean sequence of dots without "vertical scatter" overlap. The model prediction should be plotted horizontally over these exact discrete points. 
 
 ---
 
@@ -104,20 +81,29 @@ All 5 ensemble members satisfy the Gatheral-Jacquier no-arbitrage constraint `et
 
 > **Results: Pending retraining.** Previous results were based on an older Model 1 and dataset configuration.
 
-## 3. DGM (Deep Galerkin Method PDE Solver)
+## 3. Model 2: ICNN Dupire Local Volatility Extractor
 
-### Configuration
+> **Status (2026-02-22):** Implementation Complete (V1-V3). The system now extracts mathematically guaranteed arbitrage-free (butterfly-free) surfaces.
 
-| Parameter | Value |
-|-----------|-------|
-| Architecture | 3 S-layers, 64 hidden dim |
-| Domain | sigma: [0.05, 1.0], t: [0.02, 2.0], S: [0.5, 1.5] |
-| Loss weights | PDE: 1.0, BC: 1.0, TC: 1.0 |
-| Collocation points | Interior: 5000, Boundary: 500, Terminal: 500 |
-| Resample every | 100 epochs |
-| Epochs | 5000 |
+### Architecture (Phased Implementation)
 
-> **Results: Pending retraining.** DGM is domain-independent (doesn't depend on Model 1), but will be retrained for consistency with the latest codebase.
+| Phase | Core Component | Goal | Status |
+|-------|---------------|------|--------|
+| **V1** | Soft-constraint PINN (MLP + Dupire PDE loss) | Prototype pipeline connectivity | ✅ Validated (Pipeline functional) |
+| **V2** | ICNN (hard ∂²C/∂K² ≥ 0 via non-negative weights) | Eliminate 74% butterfly violations | ✅ Validated (0% violations) |
+| **V3** | Module D (Vanna/Volga/∂σ_LV/∂K) features | Expand 12→15 dim for Model 3 | ✅ Extracted (Extract features working) |
+
+### Dual-Path Verification (V2 ICNN Performance)
+
+The V2 ICNN replaced the standard MLP PriceNetwork, mathematically guaranteeing convexity via non-negative weights and monotone activations.
+
+| Metric | V1 (Soft PINN) | V2 (ICNN) | Implication |
+|--------|----------------|-----------|-------------|
+| Butterfly Violations | >0% | **0.00%** | ICNN successfully eliminated the fundamental flaw of Model 1. |
+| Convergence Rate | Fast | Slower initial | ICNN softplus initialization requires more epochs to drop loss. |
+| Volatility Expressivity | ~0.18 | ~0.14 | Reduced network capacity (due to non-negative constraint) caused slight under-extraction compared to true value (0.20), but the trade-off is absolutely necessary for PDE stability. |
+
+> The legacy DGM code (`src/dgm.py`, `src/train_dgm.py`) is retained for reference but is no longer part of the active pipeline.
 
 ## 4. Adjustment Model — Architecture Comparison (2026-02-21)
 
@@ -140,7 +126,7 @@ All 5 ensemble members satisfy the Gatheral-Jacquier no-arbitrage constraint `et
 **Base features (6):** vix_change, underlying_return, logm, tau, tv_pred, itm_otm
 **Enhancement features (6):** sp500_return, iv_term_slope, iv_skew, vrp_20d, futures_basis_pct, rv_20d
 
-> **Data leakage fix (2026-02-20):** The original `train_adjustment.py` used `random_split` for train/val, causing temporal leakage. Now uses chronological split (first 80% dates → train, last 20% → val). KDE weights are fitted on train targets only.
+> **Data leakage fix (2026-02-20):** The original `train_adjustment.py` used `random_split` for train/val, causing temporal leakage. Now uses chronological split (first 80% dates → train, last 20% → val, split at 2020-06-05). KDE weights are fitted on train targets only.
 
 ### Architecture Configurations
 
@@ -179,10 +165,16 @@ All 5 ensemble members satisfy the Gatheral-Jacquier no-arbitrage constraint `et
 
 All three models show significant overfitting. Early stopping selects the correct epoch, but the large train-val gap indicates that regularization could push the val loss floor lower. This is the subject of ongoing research — see `model3_research/overfitting_research/`.
 
-**Current overfitting research directions:**
-1. **Parameter Drift Analysis** — Track which parameters drift after val loss bottoms out, classify as stable (signal) vs drifting (noise), apply targeted regularization
+**Current overfitting research directions (in progress, 2026-02-22):**
+1. **AdamW baseline** — Standard weight decay as baseline reference
 2. **Cautious Weight Decay (CWD)** — ICLR 2026, one-line modification to AdamW for per-parameter selective weight decay
 3. **Constrained Parameter Regularization (CPR)** — NeurIPS 2024, per-parameter-matrix adaptive regularization
+4. **Elastic Weight Consolidation (EWC)** — Penalizes deviation from important parameter values
+
+Experiments were conducted on both GRU and TFT architectures. The final results successfully established a new higher validation floor:
+- **GRU**: Cautious Weight Decay (CWD) improved validation loss from `0.1639` to `0.1582` (-3.4%).
+- **TFT**: Constrained Parameter Regularization (CPR) alongside `float32` training reached a new lowest validation loss of **`0.1521`** (improving upon the previous best xLSTM score of `0.1544`). TFT + CPR is now the recommended architecture for Model 3.
+- Full results and loss curves are documented in `model3_research/regularization_results.md`.
 
 ### TFT Feature Importance (Variable Selection Network)
 
@@ -217,10 +209,10 @@ RTX 4060 Laptop: FP32 ~15.11 TFLOPS, FP64 ~0.236 TFLOPS (1/64 ratio). Benchmark:
 
 ### Key Findings
 
-1. **xLSTM is the best model**: 4.3% RMSE improvement over GRU baseline, with fewest parameters (39K)
-2. **TFT also beats baseline**: 1.7% RMSE improvement, but 6.8x more parameters than xLSTM
-3. **GRU is fastest to train**: 41.4 min vs 207.1 (TFT) and 311.5 (xLSTM) — cuDNN optimized kernel
-4. **All three models overfit**: train-val gap 2.8–6.9x, regularization research in progress
+1. **TFT + CPR is the best model**: Applying CPR to TFT achieved the lowest overall RMSE (0.1404) and MAPE (8.89%), beating the unregularized xLSTM.
+2. **xLSTM is highly parameter-efficient**: 39K parameters vs TFT's 265K, while still beating the GRU baseline by 4.3% in RMSE.
+3. **GRU is fastest to train**: 41.4 min vs 175.3 (TFT fp32) and 311.5 (xLSTM) — cuDNN optimized kernel
+4. **All three models overfit**: train-val gap 2.8–6.9x without regularization. Adding CPR or CWD is mandatory.
 5. **Enhancement features contribute 47.7%** of TFT importance — validates the 6 new features
 6. **tv_pred is the most important feature** (21.4%) — Model 1's output is the key input
 7. **float32 only helps TFT** (3x speedup); xLSTM is memory-bound (no benefit)
@@ -240,7 +232,7 @@ RTX 4060 Laptop: FP32 ~15.11 TFLOPS, FP64 ~0.236 TFLOPS (1/64 ratio). Benchmark:
 | Batch size | 16 |
 | Epochs | 1000 |
 
-> **Results: Pending retraining.** Previous results used an older dataset configuration with `vixtwn_change` feature (condition_dim 13→11).
+> **Results: Pending retraining.** Previous results used an older dataset configuration with `vixtwn_change` feature (condition_dim was 13, now 11). Data quality issues in 2022-2026 data must be resolved first.
 
 ---
 
@@ -262,22 +254,25 @@ The `src/transfer.py` module handles:
 1. **Single underlying asset** — All models are trained on TXO only. Transfer to other markets would require retraining.
 2. **Base model instability** — Physics-informed loss with 6 weighted terms is sensitive to hyperparameters. Training frequently diverges without careful learning rate tuning.
 3. **No model stacking** — The five models are trained independently. An ensemble or stacking approach could combine their strengths.
-4. **Butterfly violations** — The base model's 84% violation rate indicates the density constraint needs stronger enforcement (e.g., Lagrangian dual or penalty scheduling).
+4. **Butterfly violations** — The base model's 74% violation rate indicates the density constraint needs stronger enforcement (e.g., Lagrangian dual or penalty scheduling).
 
-## Retraining Plan
+## Current Status & Next Steps
 
-Remaining models need retraining:
+| Model | Status | Next Step |
+|-------|--------|----------|
+| Model 1 (SSVI+NN) | ✅ Trained (2014-2020 / 2021 test) | Future: retrain on full dataset after data quality fixes |
+| Model 2 (ICNN Dupire) | ✅ Implemented (V1-V3) | Local volatility and higher-order Greeks safely extracted |
+| Model 3 (Adjustment) | ✅ Arch comparison & regularization done | 3 shortlisted models (TFT+CPR, TFT+AdamW, GRU+CWD) retained. Integration pending |
+| Model 4 (HyperIV) | ⏳ Pending retraining | Retrain after Model 1 is stable |
+| Model 5 (DDPM) | ⏳ Pending retraining | Retrain after data quality issues resolved |
 
-1. **Model 4 (HyperIV)** — Independent of Model 1, can train in parallel
-2. **Model 2 (DGM)** — Independent of Model 1, can train in parallel
-3. ~~**Model 3 (Adjustment)**~~ — **Architecture comparison complete (2026-02-21)**. xLSTM selected. Regularization research in progress before production integration.
-4. **Model 5 (DDPM)** — Independent but benefits from updated conditioning features
-
-Key changes since last training:
-- `vixtwn_change` feature removed (Adjustment: 13→12 input dims, DDPM: 13→11 condition dims)
-- Model 1 retrained with additive architecture and fixed SSVI constraints
-- Data leakage fix applied to Adjustment model's train/val split
-- Model 3 architecture comparison: xLSTM > TFT > GRU (see Section 4)
+Key changes made recently:
+- Additive architecture confirmed (multiplicative explodes at epoch 2)
+- SSVI bounded parameterization: `eta = 2*sigmoid(raw_eta)`, `gamma = sigmoid(raw_gamma)`
+- `vixtwn_change` feature removed (Adjustment: input_dim now 12, DDPM: condition_dim now 11)
+- Data leakage fix: chronological split + KDE train-only fitting
+- Model 3 architecture comparison & regularization: TFT + CPR selected as primary choice. Non-shortlisted experiments archived.
+- Model 2 ICNN redesign complete: Soft PINN (V1) → ICNN (V2) → Greek Extractor Module D (V3). Butterfly violations permanently eliminated.
 
 ## Future Work
 

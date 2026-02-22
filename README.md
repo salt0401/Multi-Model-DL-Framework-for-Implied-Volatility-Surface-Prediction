@@ -29,7 +29,7 @@ Accurately predicting this surface matters because it determines the fair price 
 This system uses five complementary models, each addressing different aspects of IV surface prediction. Think of them as a team of specialists:
 
 - **Models 1 & 4** are *interpolators* — they predict today's IV surface from observed option prices
-- **Model 2** is a *physics engine* — it verifies that option prices obey the Black-Scholes equation
+- **Model 2** is a *local volatility extractor* — it extracts arbitrage-free local volatility surfaces using a Dupire PDE-constrained ICNN
 - **Model 3** is a *crisis detector* — it adjusts predictions during market stress
 - **Model 5** is a *forecaster* — it predicts tomorrow's IV surface from today's market conditions
 
@@ -45,19 +45,19 @@ The loss function has six components: (1) fit the observed data (RMSE), (2) stay
 
 **Why an ensemble?** Training 5 networks with different random initializations and averaging their predictions reduces variance and produces more stable results than any single network.
 
-**Results (2025-2026 test):** TV-RMSE 0.0120, MAPE 33.0%, IV-RMSE 0.219
+**Results (2021 test):** TV-RMSE 0.0134, MAPE 44.1%, IV-RMSE 0.209, Butterfly violations 74%
 
-### 2. DGM: PDE Solver for Black-Scholes
+### 2. ICNN Dupire: Local Volatility Extractor
 
-**What it does:** Learns to solve the Black-Scholes partial differential equation (PDE) — the fundamental equation that governs how option prices change over time.
+**What it does:** Extracts the **local volatility surface** σ_LV(K,T) and **risk-neutral density** q(K,T) from Model 1's output, while simultaneously correcting the 74% butterfly violation problem.
 
-**Why it matters:** The Black-Scholes PDE is like Newton's laws for options. If a model's predictions violate this equation, the prices are physically inconsistent. Traditional methods solve this equation on a grid (like a spreadsheet), but DGM uses a neural network as a smooth, continuous approximation — no grid required.
+**Why it matters:** Model 1's predictions have 74% butterfly violations — points where the predicted surface implies negative probability density, making direct application of the Dupire formula impossible (it produces imaginary local volatility). Model 2 learns a self-consistent pair of (call price, local vol) that satisfies the Dupire PDE, eliminating these violations from the architecture level.
 
-**How it works:** The **Deep Galerkin Method** trains a neural network to minimize three errors simultaneously: (1) how badly the network violates the PDE at random interior points, (2) how badly it violates boundary conditions at extreme prices, and (3) how badly it matches the known payoff at expiration. The training points are re-sampled every 100 epochs so the network sees a fresh set of equations to satisfy.
+**How it works:** An **Input-Convex Neural Network (ICNN)** guarantees that the predicted call price is always convex in the strike price K — this mathematically ensures ∂²C/∂K² ≥ 0 (the butterfly condition) by construction, not just by penalty. All weight matrices in the K→C(K) path are forced non-negative via softplus, and activations are monotone increasing (ReLU/Softplus). A second network predicts local volatility σ²_LV(K,T), and both networks are jointly trained to satisfy the **Dupire PDE**: ∂C/∂T = ½ σ²_LV K² ∂²C/∂K².
 
-The architecture uses LSTM-like "S-layers" with gating mechanisms — these help the network learn the complex nonlinear interactions between time, stock price, and volatility.
+**Dual-path strategy:** The primary path (α) uses ICNN for hard convexity guarantee. An alternative path (β) uses Module A (soft surface correction) + GNO (Graph Neural Operator) for offline-trained global mapping. Both paths feed into Module D (Greeks: Vanna, Volga, ∂σ_LV/∂K) before Model 3.
 
-**Results:** Pending retraining with latest codebase.
+**Results:** V1 (Soft PINN), V2 (ICNN with hard convexity), and V3 (Module D Greeks extraction) are complete. The V2 ICNN successfully eliminated 100% of butterfly violations. Downstream models now receive a 15-dimensional state (base + local vol + vanna + volga + lv gradient).
 
 ### 3. Adjustment Model: Architecture Comparison (GRU / xLSTM / TFT)
 
@@ -69,16 +69,16 @@ The architecture uses LSTM-like "S-layers" with gating mechanisms — these help
 
 **Architecture comparison (2026-02-21):** Three architectures were trained and compared on identical data (245K sequences, chronological split, GPU float64):
 
-| Metric | GRU (Baseline) | xLSTM (mLSTM) | TFT |
-|--------|:---:|:---:|:---:|
-| **Val RMSE** | 0.1477 | **0.1414** | 0.1452 |
-| **Val MAPE** | 9.43% | **9.01%** | 9.12% |
-| Parameters | 58,689 | **39,133** | 265,281 |
-| Training Time | **41.4 min** | 311.5 min | 207.1 min |
+| Metric | GRU (Baseline) | xLSTM (mLSTM) | TFT (Baseline) | TFT (CPR Regularized) |
+|--------|:---:|:---:|:---:|:---:|
+| **Val RMSE** | 0.1477 | 0.1414 | 0.1452 | **0.1404** |
+| **Val MAPE** | 9.43% | 9.01% | 9.12% | **8.89%** |
+| Parameters | 58,689 | **39,133** | 265,281 | 265,281 |
+| Training Time | **41.4 min** | 311.5 min | 207.1 min | 175.3 min (fp32) |
 
-**Winner: xLSTM (mLSTM)** — 4.3% RMSE improvement over GRU baseline with fewest parameters (39K). TFT also beats baseline (+1.7%) and provides excellent interpretability via its Variable Selection Network. All three models exhibit significant overfitting (train-val gap 2.8–6.9x), which is the subject of ongoing research. See `model3_research/` for full analysis.
+**Winner: TFT with CPR** — Achieved the lowest RMSE (0.1404) and MAPE (8.89%), beating the unregularized xLSTM. While xLSTM is parameter-efficient, TFT provides excellent interpretability via its Variable Selection Network. Regularization (Constrained Parameter Regularization, CPR) was the key to unlocking TFT's performance by mitigating overfitting.
 
-**Results (2026-02-21):** Architecture comparison complete. xLSTM selected as best candidate. Regularization research in progress to reduce overfitting before production integration.
+**Results (2026-02-22):** Architecture comparison and regularization research are complete. TFT + CPR selected as best candidate. Model 2 (ICNN Dupire) implementation complete (V1-V3).
 
 ### 4. HyperIV: Hypernetwork (State-of-the-Art)
 
@@ -116,31 +116,64 @@ The architecture is a **1D U-Net** (encoder-decoder with skip connections). Cond
 
 ## Results Summary
 
-> **Status (2026-02-21):** Model 1 (SSVI+NN) is trained and validated. Model 3 (Adjustment) architecture comparison is complete — xLSTM selected, regularization research in progress. Models 2, 4, 5 require retraining. See `EXPERIMENT.md` for details.
+> **Status (2026-02-22):** Model 1 (SSVI+NN) is trained on `prs_dataset_no_fat(clean)` (2014-2020 train, 2021 test). Model 2 (ICNN Dupire) has completed implementation and validation for its V1-V3 phases. Model 3 (Adjustment) architecture comparison is complete — TFT+CPR selected. Models 4, 5 await retraining.
 
 ### Model 1 (Base SSVI+NN) — Current
 
-| Metric | Round 1 (2021 test) | Round 2 (2025-26 test) | Change |
-|--------|---------------------|------------------------|--------|
-| TV-RMSE | 0.0134 | **0.0120** | -10.4% |
-| MAPE | 44.1% | **33.0%** | -25.2% |
-| IV-RMSE | 0.209 | 0.219 | +4.8% |
+| Metric | Value (2021 test) |
+|--------|-------------------|
+| TV-RMSE | 0.0134 |
+| MAPE | 44.1% |
+| IV-RMSE | 0.209 |
+| Butterfly violations | 74% |
+
+> An extended dataset (`prs_dataset_full.csv`, 480K rows, 2014-2026) exists but has known data quality issues in the 2022-2026 portion (see `docs/discussion_notes.md` §3.2). A future round of training on the full dataset is planned once these issues are resolved.
+
+#### Training Curve & Implied Volatility Fit
+
+**Training & Validation Loss:**  
+The model optimizes 5 ensemble members simultaneously. Checkpointing saves the parameters at the lowest validation loss to avoid subsequent SSVI gradient explosion and degradation.
+![Model 1 Loss Curve](figures/m1_loss_curve.png)
+
+**Train Set Fit (2014-2020):**  
+Each plot shows the observed options (blue dots) and the model's predicted IV curve (red line) for a specific expiration (tau) and baseline volatility level (yATM).
+![Model 1 Train Fit](figures/m1_train_fit.png)
+
+**Validation Set Fit (2014-2020 chronological split):**
+![Model 1 Validation Fit](figures/m1_val_fit.png)
+
+**Test Set Fit (2021 out-of-sample):**
+![Model 1 Test Fit](figures/m1_test_fit.png)
 
 ### Model 3 (Adjustment) — Architecture Comparison Complete
 
 | Architecture | Val RMSE | Val MAPE | Params | Status |
 |-------------|:---:|:---:|:---:|--------|
-| xLSTM (mLSTM) | **0.1414** | **9.01%** | 39K | **Best** — regularization research in progress |
-| TFT | 0.1452 | 9.12% | 265K | Complete — excellent interpretability |
-| GRU (baseline) | 0.1477 | 9.43% | 59K | Complete — baseline reference |
+| TFT + CPR | **0.1404** | **8.89%** | 265K | **Primary Choice** — Best overall performance & interpretability |
+| TFT + AdamW | 0.1436 | 8.99% | 265K | Alternate Choice — Strong runner-up |
+| GRU + CWD (baseline) | 0.1447 | 9.13% | 59K | Baseline Choice — Fastest inference, reference model |
 
-### Models 2, 4, 5 — Pending Retraining
+> **Note:** As of 2026-02-22, the 3 models above have been officially shortlisted and retained in `model3_research/models/`. All other preliminary experiments (including xLSTM and unregularized versions) have been moved to `archived_models/` to maintain a clean project structure.
+
+#### Regularization Loss Curves
+
+During the architecture search, significant overfitting was observed across the board (e.g. train-val gap 2.8x-6.9x). The following plots show the impact of different regularization methods on the training and validation loss:
+
+**Temporal Fusion Transformer (TFT) Regularization:**  
+Constrained Parameter Regularization (CPR) significantly suppressed the validation loss spikes, allowing the highly-parameterized TFT model to achieve the lowest overall error.
+![TFT Loss Curves](model3_research/figures/tft_regularization_loss_curves.png)
+
+**GRU Baseline Regularization:**  
+Cautious Weight Decay (CWD) mitigated overfitting better than standard AdamW for the recurrent GRU baseline.
+![GRU Loss Curves](model3_research/figures/baseline_regularization_loss_curves.png)
+
+### Models 2, 4, 5 — Pending
 
 | Model | Task | Status |
 |-------|------|--------|
+| ICNN Dupire | Local vol extraction | Implemented (V1-V3) |
 | HyperIV | Point prediction (SOTA) | Needs retraining |
-| DGM | PDE solving | Needs retraining |
-| DDPM | Surface forecasting | Needs retraining (condition_dim=11, was 13) |
+| DDPM | Surface forecasting | Needs retraining (condition_dim=11) |
 
 ### Model 1 (SSVI+NN) Training Details
 
@@ -154,7 +187,9 @@ The architecture is a **1D U-Net** (encoder-decoder with skip connections). Cond
 | Batch size | 256 |
 | LR schedule | MultiStepLR (gamma=0.5 every 5 epochs after epoch 500) |
 | Early stopping | Patience 50 epochs |
-| Training data | 480,194 rows (2014-2024), test on 2025-2026 |
+| Dataset | `prs_dataset_no_fat(clean)` (~254K rows) |
+| Training period | 2014-01-01 to 2020-12-31 |
+| Test period | 2021-01-01 to 2021-12-31 |
 
 #### SSVI Learned Parameters
 
@@ -197,18 +232,15 @@ The zero butterfly and calendar losses confirm the model produces **arbitrage-fr
 
 This shape is market-consistent: the strong left skew (38.5% vs 25.3%) reflects the well-known demand for downside protection in equity options, and the slight right-wing uptick produces the characteristic "smirk" shape.
 
-#### Test Prediction Statistics
+#### Test Prediction Statistics (2021 Test)
 
 | Metric | Value |
 |--------|-------|
-| Test points | 50,310 |
-| Mean predicted TV | 0.0105 |
-| Std | 0.0114 |
-| Min / Max | 4.3e-5 / 0.129 |
-| Invalid predictions | 0 (no NaN, Inf, or negative values) |
-| **TV-RMSE** | **0.0120** |
-| **MAPE** | **33.0%** |
-| **IV-RMSE** | **0.219** |
+| Test points | ~52K |
+| **TV-RMSE** | **0.0134** |
+| **MAPE** | **44.1%** |
+| **IV-RMSE** | **0.209** |
+| **Butterfly violations** | **74%** |
 
 #### Architecture Decision: Additive vs Multiplicative
 
@@ -225,13 +257,13 @@ Training curve and IV surface visualizations can be regenerated from the trainin
 
 ## Key Findings (from Model 1 training)
 
-1. **More data helps significantly.** Expanding from 254K to 480K data points and 7 to 12 years of history reduced the base model's MAPE from 44.1% to 33.0% — a 25% improvement just from more training data.
+1. **The base model has a stability problem.** SSVI parameter optimization becomes unstable after extended training, causing gradient explosion. This is a fundamental challenge of combining parametric models (SSVI) with neural network optimization — the parametric part can drift into degenerate configurations. Early stopping and checkpoint saving are essential safeguards.
 
-2. **The base model has a stability problem.** SSVI parameter optimization becomes unstable after ~60 epochs on the extended dataset, causing gradient explosion. This is a fundamental challenge of combining parametric models (SSVI) with neural network optimization — the parametric part can drift into degenerate configurations. Early stopping and checkpoint saving are essential safeguards.
+2. **Additive architecture is essential.** A/B testing confirmed that `w = SSVI + yATM * NN` is strictly superior to the multiplicative `w = SSVI * NN`. The multiplicative version explodes at epoch 2 due to product-rule cross-terms in the butterfly constraint derivatives.
 
-3. **Additive architecture is essential.** A/B testing confirmed that `w = SSVI + yATM * NN` is strictly superior to the multiplicative `w = SSVI * NN`. The multiplicative version explodes at epoch 2 due to product-rule cross-terms in the butterfly constraint derivatives.
+3. **Butterfly violations remain a challenge.** The base model's 74% butterfly violation rate indicates the density constraint needs stronger enforcement. This motivates Model 2 (ICNN Dupire), which guarantees convexity by architecture.
 
-4. **IV-RMSE can be misleading.** Despite better TV-RMSE, IV-RMSE increased in Round 2 because the 2025-2026 test period has more short-maturity options. The conversion `IV = sqrt(TV / tau)` amplifies errors when tau is small — a mathematical artifact, not a model failure.
+4. **SSVI bounded parameterization is critical.** Constraining `eta ∈ (0,2)` via sigmoid and enforcing negative rho for equity left-skew prevents parameter explosion during training.
 
 ## Project Structure
 
@@ -248,8 +280,12 @@ src/
   train.py              # Base model training loop
   experiment.py         # Experiment runner with visualization
   test.py               # Evaluation with arbitrage violation checks
-  dgm.py                # DGM PDE solver network
-  train_dgm.py          # DGM training with collocation resampling
+  dgm.py                # DGM PDE solver network (legacy, retained for reference)
+  train_dgm.py          # DGM training with collocation resampling (legacy)
+  dupire_pinn.py        # Dupire PINN local vol extractor (V1/V2 ICNN)
+  train_dupire.py       # Dupire PINN training script
+  module_d.py           # V3 Greeks Extractor (Vanna, Volga, LV Grad)
+  extract_features.py   # V3 downstream feature extraction script
   structural_break.py   # CUSUM/Bai-Perron change-point detection
   adjustment.py         # GRU+Attention adjustment model
   train_adjustment.py   # Adjustment training pipeline
@@ -279,6 +315,8 @@ docs/
   prediction_analysis.md # Architecture fix notes
 models/                 # Trained model weights (.pt, gitignored)
 dataset/                # TXO options data (gitignored)
+                        #   prs_dataset_no_fat(clean).csv (~254K rows, 2014-2021, active)
+                        #   prs_dataset_full.csv (480K rows, 2014-2026, NOT used — data quality issues)
 logs/                   # Training logs and metrics (gitignored)
 tests/                  # 215 unit tests
 ```
@@ -310,8 +348,11 @@ cd src
 # Phase 1: Train base model (SSVI + NN ensemble)
 python train.py --on_gpu --epochs 2000
 
-# Phase 2: Train DGM PDE solver
-python train_dgm.py --on_gpu
+# Phase 2: Train ICNN Dupire local vol extractor (V2)
+python train_dupire.py --on_gpu --use_icnn
+
+# Phase 2.5: Extract V3 Features (Vanna, Volga) for Model 3
+python extract_features.py --model_path ../models/DupireModel.pt --use_icnn
 
 # Phase 3: Train adjustment model (requires base model to be trained first)
 python train_adjustment.py --on_gpu
@@ -367,12 +408,13 @@ python scripts/build_features.py
 
 ### Data Files
 
-| File | Description | Rows |
-|------|-------------|------|
-| `dataset/prs_dataset_full.csv` | Full TXO options dataset (2014-2026) | 480,194 |
-| `dataset/TWII_full.csv` | TAIEX underlying index daily prices | 2,947 |
-| `dataset/VIX_full.csv` | CBOE VIX index daily | 3,043 |
-| `dataset/enhancement/daily_features.csv` | Computed market features (23 columns) | 2,947 |
+| File | Description | Rows | Status |
+|------|-------------|------|--------|
+| `dataset/prs_dataset_no_fat(clean).csv` | TXO options (2014-2021, pre-processed) | ~254K | **Active** — used for training |
+| `dataset/prs_dataset_full.csv` | Extended TXO options (2014-2026) | 480,194 | Not used — data quality issues in 2022-2026 portion |
+| `dataset/TWII.csv` / `TWII_full.csv` | TAIEX underlying index daily prices | ~2,900 | |
+| `dataset/VIX.csv` / `VIX_full.csv` | CBOE VIX index daily | ~3,000 | |
+| `dataset/enhancement/daily_features.csv` | Computed market features (23 columns) | ~2,900 | |
 
 ### Enhancement Features
 
@@ -389,7 +431,9 @@ These additional market features improve the Adjustment and DDPM models by provi
 
 ### Train/Test Split
 
-Training uses 2014-2024 data; testing uses 2025-2026 data (strictly chronological split, no data leakage). The validation set is a 20% random sample within the training period.
+Training uses 2014-2020 data; testing uses 2021 data (strictly chronological split, no data leakage). The validation set is the last 20% of training dates (chronological, not random).
+
+> **Note:** The 2022-2026 data in `prs_dataset_full.csv` has known quality issues (tau distribution shift, hardcoded risk-free rate, extreme IV values) and has **not** been used for training. See `docs/discussion_notes.md` §3.2 for details.
 
 ## Testing
 

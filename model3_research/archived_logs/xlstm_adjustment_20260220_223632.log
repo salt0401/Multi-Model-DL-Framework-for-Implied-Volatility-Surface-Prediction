@@ -1,0 +1,22 @@
+2026-02-20 22:36:32,882 - xlstm_adjustment - INFO - === Training XLSTM Adjustment Model ===
+2026-02-20 22:36:32,884 - xlstm_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
+2026-02-20 22:36:32,885 - xlstm_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
+2026-02-20 22:36:32,981 - xlstm_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model2_research\..\src\../models/MultiModel.pt
+2026-02-20 22:36:32,981 - xlstm_adjustment - INFO - Preparing adjustment data...
+2026-02-20 22:36:42,364 - xlstm_adjustment - INFO - Data shape: sequences=torch.Size([245228, 20, 12]), targets=torch.Size([245228, 1]), input_dim=12
+2026-02-20 22:36:42,373 - xlstm_adjustment - INFO - Chronological split: train < 2020-06-05T00:00:00.000000, train=179615, val=65613
+2026-02-20 22:36:42,373 - xlstm_adjustment - INFO - Fitting KDE weights...
+2026-02-20 22:38:08,350 - xlstm_adjustment - INFO - Building xlstm model...
+2026-02-20 22:38:08,355 - xlstm_adjustment - INFO - Model parameters: 39,133 total, 39,133 trainable
+2026-02-20 22:38:09,609 - xlstm_adjustment - INFO - Training: epochs=1000, lr=0.001, batch_size=256
+2026-02-20 22:38:09,609 - xlstm_adjustment - INFO - Save path: C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model2_research\models\xlstm_AdjustmentModel.pt
+2026-02-20 23:53:30,906 - xlstm_adjustment - INFO - Epoch 50/1000 - Train: 0.072904 - Val: 0.171631 - Best: 0.171631 - LR: 1.00e-03 - Time: 75.4min
+2026-02-21 01:15:26,857 - xlstm_adjustment - INFO - Epoch 100/1000 - Train: 0.063026 - Val: 0.166653 - Best: 0.160517 - LR: 1.00e-03 - Time: 157.3min
+2026-02-21 02:19:20,139 - xlstm_adjustment - INFO - Epoch 150/1000 - Train: 0.059217 - Val: 0.172028 - Best: 0.154397 - LR: 1.00e-03 - Time: 221.2min
+2026-02-21 03:11:10,264 - xlstm_adjustment - INFO - Epoch 200/1000 - Train: 0.054625 - Val: 0.168477 - Best: 0.154397 - LR: 5.00e-04 - Time: 273.0min
+2026-02-21 03:49:36,711 - xlstm_adjustment - INFO - Early stopping at epoch 239
+2026-02-21 03:49:36,711 - xlstm_adjustment - INFO - Training complete: 311.5 minutes, best val loss: 0.154397
+2026-02-21 03:49:36,711 - xlstm_adjustment - INFO - Final evaluation on validation set...
+2026-02-21 03:49:42,031 - xlstm_adjustment - INFO - XLSTM model - RMSE: 0.141369, MAPE: 0.0901
+2026-02-21 03:49:42,033 - xlstm_adjustment - INFO - Results saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model2_research\logs\xlstm_results.json
+2026-02-21 03:49:42,035 - xlstm_adjustment - INFO - Done.

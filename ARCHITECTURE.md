@@ -9,15 +9,15 @@
                                  DataProcessor
                                 /      |       \
                           Train      Val       Test
-                       (2014-2024)  (20%)    (2025-2026)
+                       (2014-2020)  (20%)    (2021)
                             |
         +------------------+------------------+------------------+
         |                  |                  |                  |
     Phase 1            Phase 2            Phase 3           Phase 4/5
-    Base Model         DGM PDE           Adjustment         HyperIV / DDPM
-    (SSVI+NN)          Solver            (GRU+Attn)         (independent)
+    Base Model         ICNN Dupire        Adjustment         HyperIV / DDPM
+    (SSVI+NN)          Local Vol          (TFT+Attn)       (independent)
         |                  |                  |                  |
-    MultiModel.pt      DGMModel.pt      AdjModel.pt      HyperIV.pt / Diffusion.pt
+    MultiModel.pt    DupireICNN.pt      AdjModel.pt      HyperIV.pt / Diffusion.pt
         |                  |                  |                  |
         +--------+---------+--------+--------+                  |
                  |                                               |
@@ -37,9 +37,10 @@ All training scripts support `--finetune <path>` for transfer learning from exis
 Handles all data loading, feature engineering, and splitting:
 
 ```
-Raw CSV (prs_dataset_full.csv, 480K rows, 2014-2026)
-  Sources: original 2014-2021 CSV + FinMind API (2022-2026)
-  Created by: scripts/download_data.py
+Raw CSV (prs_dataset_no_fat(clean).csv, ~254K rows, 2014-2021)
+  Sources: original 2014-2021 CSV (pre-processed from PKL)
+  Note: prs_dataset_full.csv (480K rows, 2014-2026) exists but has
+        known data quality issues — not used for training yet
     |
     v
 Column Handling
@@ -71,9 +72,9 @@ Beta-Tau Estimation
     |
     v
 Chronological Split (no leakage)
-    - Train: 2014-01-01 to 2024-12-31
-    - Test:  2025-01-01 to 2026-12-31
-    - Val:   20% random split of train (within-period)
+    - Train: 2014-01-01 to 2020-12-31
+    - Test:  2021-01-01 to 2021-12-31
+    - Val:   last 20% of training dates (chronological)
     |
     v
 PyTorch DataLoaders
@@ -81,7 +82,7 @@ PyTorch DataLoaders
     - Batch size from config.ini
 ```
 
-**Key design decision:** The train/test split is strictly chronological — no future data leaks into training. Validation is sampled randomly within the training period.
+**Key design decision:** The train/test split is strictly chronological — no future data leaks into training. Validation split is also chronological (last 20% of training dates), not random.
 
 ### Input Features
 
@@ -149,41 +150,56 @@ No cross-terms in derivatives (unlike multiplicative product rule).
 5. **Density** — penalizes `|d2w/dk2|` on synthetic wing data
 6. **Upper bound** — penalizes `w > 2|k|` on synthetic wing data (Lee's bound)
 
-### Phase 2: DGM PDE Solver
+### Phase 2: ICNN Dupire Local Volatility Extractor
 
+> **Redesign (2026-02-22):** The original DGM (fixed-sigma BS PDE solver) has been replaced with a Dupire PDE-constrained local volatility extractor. The old DGM code (`src/dgm.py`) is retained for reference but is no longer part of the active pipeline. See `model2_research/action_plan.md` for full design rationale.
+
+**Problem:** Model 1's 74% butterfly violation rate means direct application of the Dupire formula produces negative denominators (imaginary local vol) at most test points. Model 2 solves this by learning a self-consistent (call price, local vol) pair that satisfies the Dupire PDE.
+
+**Dual-Pipeline Strategy:**
 ```
-        (S, t, sigma)  — 3-dim input
-              |
-         Linear(3, 64)
-              |
-         SLayer x3
-         (LSTM-like gating:
-          Z=update, G=forget,
-          R=reset, H=candidate
-          + LayerNorm)
-              |
-         Linear(64, 1)
-              |
-         u(S, t, sigma)
-         (learned PDE solution)
+Path α (primary):  Model 1 → ICNN (hard ∂²C/∂K² ≥ 0) → Module D → Model 3/5
+Path β (compare):  Model 1 → Module A (soft correction) → GNO → Module D → Model 3/5
 ```
 
-**SLayer computation:**
+**Architecture (V1 → V2 → V3):**
+
 ```
-z = sigmoid(W_z * x + U_z * s_prev)      # update gate
-g = sigmoid(W_g * x + U_g * s_prev)      # forget gate
-r = sigmoid(W_r * x + U_r * s_prev)      # reset gate
-h = tanh(W_h * x + U_h * (s_prev * r))   # candidate
-s_new = LayerNorm((1 - g) * h + z * s_prev)
+V1 — Prototype (Soft-constraint PINN):
+    (A) Price Network: π_θ(k, τ)    (B) Local Vol Network: σ_LV_φ(k, τ)
+        3 residual blocks, 64 neurons     3 residual blocks, 64 neurons
+        Input: Model 1 call price prior   Output: σ²_LV(K,T) > 0 (softplus)
+        Output: corrected C(K,T)
+                    │                         │
+                    └─── Dupire PDE ───────────┘
+                    ∂C/∂T = ½ σ²_LV K² ∂²C/∂K²
+
+V2 — ICNN (Hard convexity guarantee):
+    Replace Price Network MLP with Input-Convex NN:
+    - K→C(K) path: all weight matrices ≥ 0 (softplus(W))
+    - Activations: monotone increasing (ReLU/Softplus)
+    - Guarantees ∂²C/∂K² ≥ 0 → butterfly violation = 0%
+    - Reference: Amos et al. (2017), ARBITER Legendre conjugate head
+
+V3 — Module D + GNO exploration:
+    - Module D: Vanna, Volga, ∂σ_LV/∂K from clean local vol → Model 3 (15-dim)
+    - GNO: offline-trained global mapping, 100x inference speedup
 ```
 
-**Loss = lambda_pde * L_pde + lambda_bc * L_bc + lambda_tc * L_tc**
+**Loss Function (5 terms):**
+```
+L = λ_fit    · L_fit      # fit Model 1's call prices
+  + λ_dup    · L_dupire    # Dupire PDE residual: ∂C/∂T = ½σ²_LV K² ∂²C/∂K²
+  + λ_arb    · L_arb       # no-arbitrage inequalities (calendar + butterfly + delta)
+  + λ_ini    · L_initial   # boundary: τ=0 payoff = max(S-K, 0)
+  + λ_smooth · L_smooth    # local vol smoothness (Sobolev penalty)
+```
 
-- `L_pde`: PDE residual of backward Kolmogorov equation at interior points
-- `L_bc`: boundary conditions at extreme S values
-- `L_tc`: terminal condition `u(S, T, sigma) = payoff(S)` at expiration
+**Input/Output:**
+- Input: Model 1's total variance surface w(τ, logm) + derivatives
+- Output: local vol surface σ_LV(K,T), risk-neutral density q(K,T) = ∂²C/∂K², PDE residual map
 
-Collocation points are re-sampled every 100 epochs via `DGMSampler`.
+**Hardware notes:** ICNN dual-network ~18K params total (3 layers × 64 neurons each). Mixed precision: NN forward in float32, Dupire PDE operator in float64. Must `detach()` + GC after each batch to prevent VRAM fragmentation.
 
 ### Phase 3: Adjustment Model — Architecture Comparison
 
@@ -213,7 +229,7 @@ Three architectures were evaluated (2026-02-21). All share the same input/output
     Adjustment ratio                        [58,689 params]
 ```
 
-#### Architecture B: xLSTM (mLSTM) + Attention (Winner)
+#### Architecture B: xLSTM (mLSTM) + Attention
 
 ```
    (batch, seq_len=20, 12 features)
@@ -234,7 +250,7 @@ Three architectures were evaluated (2026-02-21). All share the same input/output
     Adjustment ratio                        [39,133 params]
 ```
 
-#### Architecture C: Temporal Fusion Transformer (TFT)
+#### Architecture C: Temporal Fusion Transformer (TFT) (Winner)
 
 ```
    (batch, seq_len=20, 12 features)
@@ -258,13 +274,13 @@ Three architectures were evaluated (2026-02-21). All share the same input/output
 
 #### Comparison Results
 
-| Metric | GRU | xLSTM | TFT |
+| Metric | GRU | xLSTM | TFT (fp32) |
 |--------|:---:|:---:|:---:|
-| Val RMSE | 0.1477 | **0.1414** | 0.1452 |
+| Val RMSE | 0.1477 | 0.1414 | **0.1404** (CPR) |
 | Params | 59K | **39K** | 265K |
-| Training | **41 min** | 312 min | 207 min |
+| Training | **41 min** | 312 min | 175 min |
 
-**Selection: xLSTM (mLSTM)** — best accuracy with fewest parameters. GRU is fastest (cuDNN kernel) but worst accuracy. TFT provides excellent interpretability via VSN feature importance.
+**Selection: TFT with CPR** — Achieved the best overall accuracy (RMSE 0.1404) after employing Constrained Parameter Regularization (CPR) to solve its overfitting issues. Furthermore, it provides excellent interpretability via the Variable Selection Network, and trains reasonably fast (~3 hours) when using `float32` precision.
 
 **Three prediction modes:**
 1. `ratio` — multiplicative: `adjusted_IV = base_IV * ratio`
@@ -273,7 +289,7 @@ Three architectures were evaluated (2026-02-21). All share the same input/output
 
 > **Data leakage fix (2026-02-20):** The original `train_adjustment.py` used `random_split`, causing temporal leakage. Now uses chronological split + KDE fitted on train targets only. See `discussion_notes.md` §3.4.
 
-> **Overfitting research (2026-02-21):** All three architectures show significant train-val gap (2.8–6.9x). Research directions: Parameter Drift Analysis, Cautious Weight Decay (CWD), Constrained Parameter Regularization (CPR). See `model3_research/overfitting_research/`.
+> **Overfitting research (2026-02-22):** All three architectures showed significant train-val gap (2.8–6.9x). Regularization experiments (AdamW, CWD, CPR) successfully addressed this: CWD improved the GRU baseline (val loss `0.1582` vs `0.1639`), and CPR significantly boosted TFT performance reaching a record low val loss of **`0.1521`** (RMSE 0.1404), officially beating xLSTM. TFT + CPR is the final selected model. See `model3_research/regularization_results.md` for details.
 
 ### Phase 4: HyperIV
 
@@ -313,7 +329,7 @@ Three architectures were evaluated (2026-02-21). All share the same input/output
 
 ```
    Current surface + noise          Market conditions
-   x_t (batch, 1, 200)             (batch, 13)
+   x_t (batch, 1, 200)             (batch, 11)
          |                              |
    1D U-Net                        FiLM conditioning
    Encoder:                        (gamma * feature + beta)
@@ -417,21 +433,21 @@ test_train_integration.py  10 tests   End-to-end training loops
 
 ## Training Performance Summary
 
-> **Status (2026-02-21):** Model 1 results are current. Model 3 architecture comparison is complete. Models 2, 4, 5 require retraining.
+> **Status (2026-02-22):** Model 1 results are current (trained on 2014-2020 / 2021 test). Model 3 architecture comparison is complete, overfitting regularization in progress. Model 2 direction confirmed (ICNN Dupire), V1 in development. Models 4, 5 await retraining.
 
 | Model | Status | Key Test Metric | Notes |
 |-------|--------|----------------|-------|
-| Base (SSVI+NN) | **Current** | TV-RMSE 0.0120, MAPE 33.0% | 105/2000 ep, ~9h GPU |
-| Adjustment (xLSTM) | **Arch. comparison done** | Val RMSE 0.1414, MAPE 9.01% | 39K params, regularization research ongoing |
-| Adjustment (TFT) | **Arch. comparison done** | Val RMSE 0.1452, MAPE 9.12% | 265K params, excellent interpretability |
+| Base (SSVI+NN) | **Current** | Val loss 0.117 (pipeline 3ep), Butterfly 74% | prs_dataset_no_fat(clean), 2014-2020 |
+| Adjustment (xLSTM) | **Arch. comparison done** | Val RMSE 0.1414, MAPE 9.01% | 39K params, highly efficient |
+| Adjustment (TFT+CPR) | **Arch. comparison done** | Val RMSE 0.1404, MAPE 8.89% | 265K params, **Best Model**, excellent interpretability |
 | Adjustment (GRU) | **Arch. comparison done** | Val RMSE 0.1477, MAPE 9.43% | 59K params, baseline reference |
 | HyperIV | Pending retrain | — | Independent model |
-| DGM | Pending retrain | — | Independent model |
+| ICNN Dupire | **V1 in development** | — | ICNN local vol extractor, see `model2_research/action_plan.md` |
 | DDPM | Pending retrain | — | condition_dim=11 |
 
 ### Known Issues
-- **Base model gradient explosion:** SSVI parameter optimization becomes unstable after ~60 epochs on extended data. Best model is saved before instability. Aggressive early stopping (patience=50) is recommended.
-- **Adjustment GPU OOM:** Data preparation runs base model autograd on all 463K rows. Now mitigated with chunked inference (5000 rows/batch) in `dataset.py:prepare_adjustment_data()`.
+- **Base model gradient explosion:** SSVI parameter optimization becomes unstable after extended training. Best model is saved before instability. Aggressive early stopping (patience=50) is recommended.
+- **Adjustment GPU OOM:** Data preparation runs base model autograd on all ~254K rows. Now mitigated with chunked inference (5000 rows/batch) in `dataset.py:prepare_adjustment_data()`.
 
 ## File Index
 
@@ -443,8 +459,10 @@ test_train_integration.py  10 tests   End-to-end training loops
 | `src/train.py` | Base model training loop |
 | `src/experiment.py` | Base model evaluation + plots |
 | `src/test.py` | Base model evaluation + arbitrage violation checks |
-| `src/dgm.py` | DGM PDE solver model + sampler |
-| `src/train_dgm.py` | DGM training script |
+| `src/dgm.py` | DGM PDE solver model + sampler **(legacy, retained for reference)** |
+| `src/train_dgm.py` | DGM training script **(legacy)** |
+| `src/dupire_pinn.py` | Dupire PINN local vol extractor **(planned, V1)** |
+| `src/dupire_icnn.py` | ICNN Dupire with hard convexity **(planned, V2)** |
 | `src/adjustment.py` | AdjustmentModel (GRU+Attention) |
 | `src/train_adjustment.py` | Adjustment training (chronological split) |
 | `src/hyperiv.py` | HyperIV (Transformer + Hypernetwork) |
@@ -464,6 +482,9 @@ test_train_integration.py  10 tests   End-to-end training loops
 | `scripts/train_diagnose.py` | Training with per-epoch parameter tracking |
 | `model3_research/xlstm_adjustment.py` | xLSTM (mLSTM) adjustment model |
 | `model3_research/tft_adjustment.py` | TFT adjustment model |
-| `model3_research/train_models.py` | Unified training script for architecture comparison |
-| `model3_research/benchmark_dtype.py` | float32 vs float64 speed benchmark |
-| `model3_research/plot_loss_curves.py` | Train/val loss curve visualization |
+| `model3_research/optimizers.py` | Custom optimizers (AdamCPR, CautiousAdamW) |
+| `model3_research/scripts/train_models.py` | Unified training script for architecture comparison & regularization |
+| `model3_research/scripts/run_tft_experiments.py` | Launcher script for running all TFT models |
+| `model3_research/scripts/plot_loss_curves.py` | Train/val loss curve visualization |
+| `model3_research/scripts/plot_regularization_results.py` | Evaluation and plotting for the regularization research |
+| `model3_research/scripts/benchmark_dtype.py` | float32 vs float64 speed benchmark |
