@@ -152,7 +152,7 @@ No cross-terms in derivatives (unlike multiplicative product rule).
 
 ### Phase 2: ICNN Dupire Local Volatility Extractor
 
-> **Redesign (2026-02-22):** The original DGM (fixed-sigma BS PDE solver) has been replaced with a Dupire PDE-constrained local volatility extractor. The old DGM code (`src/dgm.py`) is retained for reference but is no longer part of the active pipeline. See `model2_research/action_plan.md` for full design rationale.
+> **Redesign (2026-02-22):** The original DGM (fixed-sigma BS PDE solver) has been replaced with a Dupire PDE-constrained local volatility extractor (`model2_research/dupire_pinn.py`). See `model2_research/README.md` for full design rationale.
 
 **Problem:** Model 1's 74% butterfly violation rate means direct application of the Dupire formula produces negative denominators (imaginary local vol) at most test points. Model 2 solves this by learning a self-consistent (call price, local vol) pair that satisfies the Dupire PDE.
 
@@ -393,7 +393,7 @@ When the model architecture changes (e.g., adding enhancement features), layers 
 
 ### Overview
 
-215 tests across 10 test files, all running in ~4 seconds on CPU.
+177 tests across 8 test files, all running in ~4 seconds on CPU.
 
 ### Design Principles
 
@@ -410,16 +410,14 @@ When the model architecture changes (e.g., adding enhancement features), layers 
 ```
 test_model.py              52 tests   Base model classes & losses
 test_utils.py              22 tests   Utilities, metrics, early stopping
-test_adjustment.py         21 tests   GRU+Attention model
 test_diffusion.py          19 tests   DDPM components
 test_model_regression.py   18 tests   Bug regression tests
-test_dgm.py                17 tests   DGM PDE solver
 test_structural_break.py   16 tests   Change-point detection
 test_hyperiv.py            15 tests   HyperIV hypernetwork
 test_dataset.py            14 tests   DataProcessor pipeline
 test_train_integration.py  10 tests   End-to-end training loops
                           ---
-                          215 total
+                          177 total
 ```
 
 ### What Tests Verify
@@ -454,17 +452,16 @@ test_train_integration.py  10 tests   End-to-end training loops
 | File | Purpose |
 |------|---------|
 | `src/config.ini` | All hyperparameters, paths, data splits |
-| `src/model.py` | SSVIModel, SmileModel, SingleModel, MultiModel, SoftmaxModel, losses |
+| `model1_research/model.py` | SSVIModel, SmileModel, SingleModel, MultiModel, SoftmaxModel, losses |
 | `src/dataset.py` | DataProcessor: loading, features, per-date yATM, splits, loaders |
-| `src/train.py` | Base model training loop |
-| `src/experiment.py` | Base model evaluation + plots |
+| `model1_research/train.py` | Base model training loop |
+| `model1_research/train_pipeline.py` | Master two-stage training loop for SSVI + Neural Network |
+| `model1_research/experiment.py` | Base model evaluation + plots |
 | `src/test.py` | Base model evaluation + arbitrage violation checks |
-| `src/dgm.py` | DGM PDE solver model + sampler **(legacy, retained for reference)** |
-| `src/train_dgm.py` | DGM training script **(legacy)** |
-| `src/dupire_pinn.py` | Dupire PINN local vol extractor **(planned, V1)** |
-| `src/dupire_icnn.py` | ICNN Dupire with hard convexity **(planned, V2)** |
-| `src/adjustment.py` | AdjustmentModel (GRU+Attention) |
-| `src/train_adjustment.py` | Adjustment training (chronological split) |
+| `model2_research/dupire_pinn.py` | Dupire PINN / ICNN local vol extractor |
+| `model2_research/train_dupire.py` | Dupire PINN training script |
+| `model2_research/module_d.py` | V3 Greeks Extractor (Vanna, Volga, LV Grad) |
+| `model2_research/extract_features.py` | V3 downstream feature extraction script |
 | `src/hyperiv.py` | HyperIV (Transformer + Hypernetwork) |
 | `src/train_hyperiv.py` | HyperIV training script |
 | `src/diffusion.py` | DDPM (1D U-Net + FiLM conditioning) |
@@ -474,13 +471,12 @@ test_train_integration.py  10 tests   End-to-end training loops
 | `src/utils.py` | Config loading, metrics, early stopping, seed |
 | `scripts/download_data.py` | Data download pipeline (FinMind + yfinance) |
 | `scripts/build_features.py` | Enhancement feature computation |
-| `scripts/compare_architectures.py` | Additive vs multiplicative A/B test |
-| `scripts/plot_smooth_iv_check.py` | Fixed-yATM smooth surface verification |
+| `model1_research/scripts/compare_architectures.py` | Additive vs multiplicative A/B test |
+| `model1_research/scripts/plot_smooth_iv_check.py` | Fixed-yATM smooth surface verification |
 | `scripts/plot_training_curves.py` | Training loss curve visualization |
-| `scripts/inspect_ssvi_params.py` | SSVI parameter inspection |
-| `scripts/diagnose_rho_gradient.py` | Per-loss rho gradient analysis |
-| `scripts/train_diagnose.py` | Training with per-epoch parameter tracking |
-| `model3_research/xlstm_adjustment.py` | xLSTM (mLSTM) adjustment model |
+| `model1_research/scripts/inspect_ssvi_params.py` | SSVI parameter inspection |
+| `model1_research/scripts/diagnose_rho_gradient.py` | Per-loss rho gradient analysis |
+| `model1_research/scripts/train_diagnose.py` | Training with per-epoch parameter tracking |
 | `model3_research/tft_adjustment.py` | TFT adjustment model |
 | `model3_research/optimizers.py` | Custom optimizers (AdamCPR, CautiousAdamW) |
 | `model3_research/scripts/train_models.py` | Unified training script for architecture comparison & regularization |

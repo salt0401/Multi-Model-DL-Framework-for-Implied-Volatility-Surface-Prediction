@@ -133,17 +133,17 @@ The architecture is a **1D U-Net** (encoder-decoder with skip connections). Cond
 
 **Training & Validation Loss:**  
 The model optimizes 5 ensemble members simultaneously. Checkpointing saves the parameters at the lowest validation loss to avoid subsequent SSVI gradient explosion and degradation.
-![Model 1 Loss Curve](figures/m1_loss_curve.png)
+![Model 1 Loss Curve](model1_research/model1_research/figures/m1_loss_curve.png)
 
 **Train Set Fit (2014-2020):**  
 Each plot shows the observed options (blue dots) and the model's predicted IV curve (red line) for a specific expiration (tau) and baseline volatility level (yATM).
-![Model 1 Train Fit](figures/m1_train_fit.png)
+![Model 1 Train Fit](model1_research/model1_research/figures/m1_train_fit.png)
 
 **Validation Set Fit (2014-2020 chronological split):**
-![Model 1 Validation Fit](figures/m1_val_fit.png)
+![Model 1 Validation Fit](model1_research/model1_research/figures/m1_val_fit.png)
 
 **Test Set Fit (2021 out-of-sample):**
-![Model 1 Test Fit](figures/m1_test_fit.png)
+![Model 1 Test Fit](model1_research/model1_research/figures/m1_test_fit.png)
 
 ### Model 3 (Adjustment) — Architecture Comparison Complete
 
@@ -280,15 +280,7 @@ src/
   train.py              # Base model training loop
   experiment.py         # Experiment runner with visualization
   test.py               # Evaluation with arbitrage violation checks
-  dgm.py                # DGM PDE solver network (legacy, retained for reference)
-  train_dgm.py          # DGM training with collocation resampling (legacy)
-  dupire_pinn.py        # Dupire PINN local vol extractor (V1/V2 ICNN)
-  train_dupire.py       # Dupire PINN training script
-  module_d.py           # V3 Greeks Extractor (Vanna, Volga, LV Grad)
-  extract_features.py   # V3 downstream feature extraction script
   structural_break.py   # CUSUM/Bai-Perron change-point detection
-  adjustment.py         # GRU+Attention adjustment model
-  train_adjustment.py   # Adjustment training pipeline
   hyperiv.py            # HyperIV hypernetwork model
   train_hyperiv.py      # HyperIV training
   diffusion.py          # DDPM (UNet1D, noise schedule, sampler)
@@ -303,9 +295,13 @@ scripts/
   inspect_ssvi_params.py    # SSVI parameter inspection
   diagnose_rho_gradient.py  # Per-loss rho gradient analysis
   train_diagnose.py         # Training with per-epoch parameter tracking
+model2_research/        # Model 2 Local Volatility Extractor (ICNN)
+  dupire_pinn.py        # Dupire PINN local vol extractor (V1/V2 ICNN)
+  train_dupire.py       # Dupire PINN training script
+  module_d.py           # V3 Greeks Extractor (Vanna, Volga, LV Grad)
+  extract_features.py   # V3 downstream feature extraction script
 model3_research/        # Model 3 architecture comparison & overfitting research
   README.md             # Training results, 3-way comparison, benchmarks
-  xlstm_adjustment.py   # xLSTM (mLSTM) adjustment model
   tft_adjustment.py     # Temporal Fusion Transformer adjustment model
   train_models.py       # Unified training script (--model xlstm|tft|baseline)
   overfitting_research/ # Overfitting analysis and regularization research
@@ -318,7 +314,7 @@ dataset/                # TXO options data (gitignored)
                         #   prs_dataset_no_fat(clean).csv (~254K rows, 2014-2021, active)
                         #   prs_dataset_full.csv (480K rows, 2014-2026, NOT used — data quality issues)
 logs/                   # Training logs and metrics (gitignored)
-tests/                  # 215 unit tests
+tests/                  # 177 unit tests
 ```
 
 ## Setup
@@ -340,27 +336,25 @@ pip install pytest
 
 ## Usage
 
-All training scripts are run from the `src/` directory:
+Training scripts are organized by model phase:
 
 ```bash
-cd src
-
 # Phase 1: Train base model (SSVI + NN ensemble)
-python train.py --on_gpu --epochs 2000
+cd model1_research
+python train_pipeline.py --on_gpu --epochs 2000
 
-# Phase 2: Train ICNN Dupire local vol extractor (V2)
+# Phase 2 & 2.5: Train ICNN Dupire local vol extractor and extract V3 features
+cd ../model2_research
 python train_dupire.py --on_gpu --use_icnn
-
-# Phase 2.5: Extract V3 Features (Vanna, Volga) for Model 3
 python extract_features.py --model_path ../models/DupireModel.pt --use_icnn
 
-# Phase 3: Train adjustment model (requires base model to be trained first)
-python train_adjustment.py --on_gpu
+# Phase 3: Train adjustment model (TFT+CPR)
+cd ../model3_research
+python scripts/train_models.py --model tft
 
-# Phase 4: Train HyperIV
+# Phase 4 & 5: Train HyperIV and DDPM
+cd ../src
 python train_hyperiv.py --on_gpu --epochs 500
-
-# Phase 5: Train DDPM
 python train_diffusion.py --on_gpu --epochs 1000
 
 # Evaluate base model on test set
@@ -376,17 +370,15 @@ python scripts/plot_training_curves.py
 All training scripts support the `--finetune` flag to initialize from a previous checkpoint. This enables faster convergence when retraining on updated data:
 
 ```bash
-cd src
+cd model1_research
 
 # Fine-tune base model from existing weights
-python train.py --on_gpu --finetune ../models/MultiModel.pt
+python train.py --on_gpu --finetune ../model1_research/models/MultiModel.pt
 
 # Fine-tune HyperIV from existing weights
 python train_hyperiv.py --on_gpu --finetune ../models/HyperIVModel.pt
 
-# Fine-tune all other models similarly
-python train_dgm.py --on_gpu --finetune ../models/DGMModel.pt
-python train_adjustment.py --on_gpu --finetune ../models/AdjustmentModel.pt
+# Fine-tune DDPM from existing weights
 python train_diffusion.py --on_gpu --finetune ../models/DiffusionModel.pt
 ```
 
@@ -437,18 +429,17 @@ Training uses 2014-2020 data; testing uses 2021 data (strictly chronological spl
 
 ## Testing
 
-215 unit tests covering all 5 model families, loss functions, data pipelines, and training loops:
+177 unit tests covering all 5 model families, loss functions, data pipelines, and training loops:
 
 ```bash
 python -m pytest tests/ -v           # All tests (~4 seconds)
-python -m pytest tests/test_model.py # Base model only
+python -m pytest model1_research/tests/test_model.py # Base model only
 ```
 
-Tests use `float64` precision, tiny model architectures (`hidden_sizes=[5,5,5]`), and synthetic data — no GPU, dataset, or trained models required.
+Tests use `float64` precision, tiny model architectures (`hidden_sizes=[5,5,5]`), and synthetic data — no GPU, dataset, or trained models required. The legacy DGM code was previously evaluated but has been completely removed in favor of the ICNN Dupire approach.
 
 ## References
 
 1. Gatheral, J. & Jacquier, A. (2014). *Arbitrage-free SVI volatility surfaces.* Quantitative Finance.
-2. Sirignano, J. & Spiliopoulos, K. (2018). *DGM: A deep learning algorithm for solving partial differential equations.* Journal of Computational Physics.
-3. HyperIV (ICML 2025). *Hypernetwork-based implied volatility surface interpolation.*
-4. Ho, J., Jain, A., & Abbeel, P. (2020). *Denoising Diffusion Probabilistic Models.* NeurIPS.
+2. HyperIV (ICML 2025). *Hypernetwork-based implied volatility surface interpolation.*
+3. Ho, J., Jain, A., & Abbeel, P. (2020). *Denoising Diffusion Probabilistic Models.* NeurIPS.

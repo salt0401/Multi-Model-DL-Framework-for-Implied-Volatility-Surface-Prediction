@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+
 """End-to-end training pipeline: SSVI+NN (Stage 1) -> Adjustment Model (Stage 2).
 
 Usage:

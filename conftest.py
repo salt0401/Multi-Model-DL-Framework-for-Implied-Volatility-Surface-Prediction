@@ -60,7 +60,7 @@ def tiny_c6_batch():
 @pytest.fixture
 def tiny_multi_model():
     """MultiModel with tiny architecture for fast tests."""
-    from model import MultiModel
+    from model1_research.model import MultiModel
     return MultiModel(hidden_sizes=[5, 5, 5], ensemble_num=2)
 
 

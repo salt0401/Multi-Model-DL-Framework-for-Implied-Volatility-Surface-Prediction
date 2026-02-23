@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+
 """Regression tests for the 17 fixed bugs (M1-M5, X1-X3, T1-T2, E1).
 
 Each test is explicitly named after its bug ID to serve as a guardrail

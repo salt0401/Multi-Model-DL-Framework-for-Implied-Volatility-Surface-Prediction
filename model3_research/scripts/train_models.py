@@ -26,7 +26,7 @@ sys.path.insert(0, _m3_dir)
 _m2_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'model2_research')
 sys.path.insert(0, _m2_dir)
 
-from model import MultiModel
+from model1_research.model import MultiModel
 from dataset import DataProcessor
 from adjustment import AdjustmentLoss, TVAdjustmentModel
 from utils import (load_config, parse_list_config, set_seed,

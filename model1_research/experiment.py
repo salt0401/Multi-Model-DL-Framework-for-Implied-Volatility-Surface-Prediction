@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+
 from model import MultiModel
 from dataset import DataProcessor
 from utils import load_config, parse_list_config, parse_date, set_seed, compute_rmse, compute_mape, compute_iv_rmse

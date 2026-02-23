@@ -3,7 +3,7 @@
 Loads trained model, runs on test set, computes RMSE/MAPE/IV-RMSE,
 reports arbitrage constraint violations, saves results to CSV.
 """
-from model import MultiModel
+from model1_research.model import MultiModel
 from dataset import DataProcessor
 from utils import load_config, parse_list_config, parse_date, set_seed, compute_rmse, compute_mape, compute_iv_rmse
 

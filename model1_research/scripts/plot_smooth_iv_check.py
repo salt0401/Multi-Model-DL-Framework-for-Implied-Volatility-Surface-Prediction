@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+
 """Verify: is the zigzag from mixed yATM or from model overfitting?
 
 Method: Fix yATM to specific values, sweep logm on a smooth grid.

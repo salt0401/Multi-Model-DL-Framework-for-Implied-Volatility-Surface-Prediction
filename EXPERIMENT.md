@@ -23,13 +23,13 @@ Detailed training results for the IV surface prediction models, trained on TXO o
 
 **Dataset:** `prs_dataset_no_fat(clean)` (~254K rows, 2014-2021)
 
-**Standalone training** (`src/train.py`):
+**Standalone training** (`model1_research/train.py`):
 - **Epochs trained:** 20 / 2000 (early stopped)
 - **Best epoch:** 17 (val loss = 1.940)
 - Initial instability: first 8 epochs had losses in the millions due to physics loss terms (calendar/butterfly constraints) calibrating against random weights
 - Converged by epoch ~9, then gradually overfit
 
-**Pipeline training** (`src/train_pipeline.py`, final run):
+**Pipeline training** (`model1_research/train_pipeline.py`, final run):
 - **Epochs trained:** 3 (Stage 1), 231 (Stage 2)
 - **Stage 1 best val loss:** 0.117 (epoch 1)
 - **Stage 2 (Adjustment):** RMSE 0.1373, MAPE 9.22%, input_dim=13
@@ -103,7 +103,7 @@ The V2 ICNN replaced the standard MLP PriceNetwork, mathematically guaranteeing 
 | Convergence Rate | Fast | Slower initial | ICNN softplus initialization requires more epochs to drop loss. |
 | Volatility Expressivity | ~0.18 | ~0.14 | Reduced network capacity (due to non-negative constraint) caused slight under-extraction compared to true value (0.20), but the trade-off is absolutely necessary for PDE stability. |
 
-> The legacy DGM code (`src/dgm.py`, `src/train_dgm.py`) is retained for reference but is no longer part of the active pipeline.
+> The legacy DGM code was completely removed from the repository as it is no longer part of the active pipeline and was superseded by ICNN Dupire.
 
 ## 4. Adjustment Model — Architecture Comparison (2026-02-21)
 
