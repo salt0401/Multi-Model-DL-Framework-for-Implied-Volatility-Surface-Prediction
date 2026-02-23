@@ -1,0 +1,56 @@
+2026-02-22 05:25:16,444 - tft_adjustment - INFO - === Training TFT Adjustment Model ===
+2026-02-22 05:25:16,446 - tft_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
+2026-02-22 05:25:16,446 - tft_adjustment - INFO - Dtype: float32
+2026-02-22 05:25:16,446 - tft_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
+2026-02-22 05:25:16,578 - tft_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\..\src\../models/MultiModel.pt
+2026-02-22 05:25:16,578 - tft_adjustment - INFO - Preparing adjustment data...
+2026-02-22 05:25:24,366 - tft_adjustment - INFO - Data shape: sequences=torch.Size([245228, 20, 12]), targets=torch.Size([245228, 1]), input_dim=12
+2026-02-22 05:25:24,376 - tft_adjustment - INFO - Chronological split: train < 2020-06-05T00:00:00.000000000, train=179615, val=65613
+2026-02-22 05:25:24,376 - tft_adjustment - INFO - Fitting KDE weights...
+2026-02-22 05:26:51,913 - tft_adjustment - INFO - Building tft model...
+2026-02-22 05:26:51,935 - tft_adjustment - INFO - Model parameters: 265,281 total, 265,281 trainable
+2026-02-22 05:26:53,972 - tft_adjustment - INFO - Optimizer: cpr (wd=N/A)
+2026-02-22 05:26:53,973 - tft_adjustment - INFO - Training: epochs=1000, lr=0.001, batch_size=256
+2026-02-22 05:26:53,973 - tft_adjustment - INFO - Save path: C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\models\tft_cpr_fp32_AdjustmentModel.pt
+2026-02-22 05:34:21,016 - tft_adjustment - INFO - Epoch 10/1000 - Train: 0.100722 - Val: 0.201276 - Best: 0.176785 - LR: 1.00e-03 - Time: 7.5min
+2026-02-22 05:43:01,065 - tft_adjustment - INFO - Epoch 20/1000 - Train: 0.092996 - Val: 0.193946 - Best: 0.169997 - LR: 1.00e-03 - Time: 16.1min
+2026-02-22 05:51:25,006 - tft_adjustment - INFO - Epoch 30/1000 - Train: 0.088536 - Val: 0.196191 - Best: 0.169997 - LR: 1.00e-03 - Time: 24.5min
+2026-02-22 05:59:18,837 - tft_adjustment - INFO - Epoch 40/1000 - Train: 0.082219 - Val: 0.184832 - Best: 0.169997 - LR: 1.00e-03 - Time: 32.4min
+2026-02-22 06:06:29,870 - tft_adjustment - INFO - Epoch 50/1000 - Train: 0.068960 - Val: 0.166801 - Best: 0.166801 - LR: 1.00e-03 - Time: 39.6min
+2026-02-22 06:12:52,994 - tft_adjustment - INFO - Epoch 60/1000 - Train: 0.063320 - Val: 0.167449 - Best: 0.155094 - LR: 1.00e-03 - Time: 46.0min
+2026-02-22 06:21:07,199 - tft_adjustment - INFO - Epoch 70/1000 - Train: 0.060305 - Val: 0.167007 - Best: 0.155094 - LR: 1.00e-03 - Time: 54.2min
+2026-02-22 06:28:00,569 - tft_adjustment - INFO - Epoch 80/1000 - Train: 0.059043 - Val: 0.163153 - Best: 0.154362 - LR: 1.00e-03 - Time: 61.1min
+2026-02-22 06:35:49,174 - tft_adjustment - INFO - Epoch 90/1000 - Train: 0.056555 - Val: 0.176656 - Best: 0.154362 - LR: 1.00e-03 - Time: 68.9min
+2026-02-22 06:43:23,476 - tft_adjustment - INFO - Epoch 100/1000 - Train: 0.056537 - Val: 0.172466 - Best: 0.153589 - LR: 1.00e-03 - Time: 76.5min
+2026-02-22 06:50:56,185 - tft_adjustment - INFO - Epoch 110/1000 - Train: 0.055122 - Val: 0.164564 - Best: 0.152183 - LR: 1.00e-03 - Time: 84.0min
+2026-02-22 06:58:29,091 - tft_adjustment - INFO - Epoch 120/1000 - Train: 0.055012 - Val: 0.172931 - Best: 0.152183 - LR: 1.00e-03 - Time: 91.6min
+2026-02-22 07:06:06,049 - tft_adjustment - INFO - Epoch 130/1000 - Train: 0.053760 - Val: 0.167872 - Best: 0.152183 - LR: 1.00e-03 - Time: 99.2min
+2026-02-22 07:13:45,785 - tft_adjustment - INFO - Epoch 140/1000 - Train: 0.053185 - Val: 0.165778 - Best: 0.152183 - LR: 1.00e-03 - Time: 106.9min
+2026-02-22 07:24:24,366 - tft_adjustment - INFO - Epoch 150/1000 - Train: 0.052361 - Val: 0.189609 - Best: 0.152183 - LR: 1.00e-03 - Time: 117.5min
+2026-02-22 07:36:27,353 - tft_adjustment - INFO - Epoch 160/1000 - Train: 0.052763 - Val: 0.173798 - Best: 0.152183 - LR: 5.00e-04 - Time: 129.6min
+2026-02-22 07:43:19,905 - tft_adjustment - INFO - Epoch 170/1000 - Train: 0.045557 - Val: 0.171537 - Best: 0.152183 - LR: 5.00e-04 - Time: 136.4min
+2026-02-22 07:50:21,211 - tft_adjustment - INFO - Epoch 180/1000 - Train: 0.046126 - Val: 0.183165 - Best: 0.152183 - LR: 5.00e-04 - Time: 143.5min
+2026-02-22 07:57:19,581 - tft_adjustment - INFO - Epoch 190/1000 - Train: 0.045369 - Val: 0.173050 - Best: 0.152183 - LR: 5.00e-04 - Time: 150.4min
+2026-02-22 08:07:56,099 - tft_adjustment - INFO - Epoch 200/1000 - Train: 0.045647 - Val: 0.174038 - Best: 0.152183 - LR: 5.00e-04 - Time: 161.0min
+2026-02-22 08:22:14,224 - tft_adjustment - INFO - Early stopping at epoch 209
+2026-02-22 08:22:14,224 - tft_adjustment - INFO - Training complete: 175.3 minutes, best val loss: 0.152183
+2026-02-22 08:22:14,224 - tft_adjustment - INFO - Final evaluation on validation set...
+2026-02-22 08:22:17,940 - tft_adjustment - INFO - TFT model - RMSE: 0.140493, MAPE: 0.0889
+2026-02-22 08:22:17,942 - tft_adjustment - INFO - Results saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\logs\tft_cpr_fp32_results.json
+2026-02-22 08:22:17,945 - tft_adjustment - INFO - Running TFT interpretability analysis...
+2026-02-22 08:22:18,013 - tft_adjustment - INFO - Feature importance (avg across timesteps):
+2026-02-22 08:22:18,013 - tft_adjustment - INFO -   tau: 0.1246
+2026-02-22 08:22:18,014 - tft_adjustment - INFO -   rv_20d: 0.1234
+2026-02-22 08:22:18,014 - tft_adjustment - INFO -   iv_skew: 0.1138
+2026-02-22 08:22:18,014 - tft_adjustment - INFO -   underlying_return: 0.1049
+2026-02-22 08:22:18,014 - tft_adjustment - INFO -   tv_pred: 0.1017
+2026-02-22 08:22:18,015 - tft_adjustment - INFO -   itm_otm: 0.0838
+2026-02-22 08:22:18,015 - tft_adjustment - INFO -   vrp_20d: 0.0799
+2026-02-22 08:22:18,015 - tft_adjustment - INFO -   futures_basis_pct: 0.0795
+2026-02-22 08:22:18,015 - tft_adjustment - INFO -   iv_term_slope: 0.0761
+2026-02-22 08:22:18,016 - tft_adjustment - INFO -   vix_change: 0.0529
+2026-02-22 08:22:18,016 - tft_adjustment - INFO -   sp500_return: 0.0464
+2026-02-22 08:22:18,016 - tft_adjustment - INFO -   logm: 0.0129
+2026-02-22 08:22:18,016 - tft_adjustment - INFO - Temporal attention (last 5 steps): [0.009128604084253311, 0.014216858893632889, 0.030794471502304077, 0.1084957867860794, 0.6955548524856567]
+2026-02-22 08:22:18,018 - tft_adjustment - INFO - Interpretability data saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\logs\tft_interpretability.json
+2026-02-22 08:22:18,019 - tft_adjustment - INFO - Done.

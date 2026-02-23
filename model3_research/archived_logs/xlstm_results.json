@@ -1,0 +1,17 @@
+{
+  "model_type": "xlstm",
+  "total_params": 39133,
+  "trainable_params": 39133,
+  "best_val_loss": 0.1543965301058879,
+  "best_epoch": 138,
+  "final_rmse": 0.14136900572299474,
+  "final_mape": 0.09007774112310821,
+  "training_minutes": 311.5,
+  "device": "cuda:0",
+  "input_dim": 12,
+  "hidden_dim": 64,
+  "epochs_run": 239,
+  "learning_rate": 0.001,
+  "batch_size": 256,
+  "timestamp": "2026-02-21T03:49:42.031064"
+}

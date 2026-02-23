@@ -1,0 +1,23 @@
+{
+  "model_type": "baseline",
+  "optimizer": "adamw",
+  "weight_decay": 0.01,
+  "ewc": false,
+  "ewc_lambda": null,
+  "layer_reset": false,
+  "dtype": "float64",
+  "total_params": 58689,
+  "trainable_params": 58689,
+  "best_val_loss": 0.15962681149487645,
+  "best_epoch": 69,
+  "final_rmse": 0.14614498831211117,
+  "final_mape": 0.09218808756542816,
+  "training_minutes": 42.2,
+  "device": "cuda:0",
+  "input_dim": 12,
+  "hidden_dim": 64,
+  "epochs_run": 170,
+  "learning_rate": 0.001,
+  "batch_size": 256,
+  "timestamp": "2026-02-21T21:10:03.625571"
+}

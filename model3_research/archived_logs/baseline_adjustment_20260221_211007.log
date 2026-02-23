@@ -1,0 +1,37 @@
+2026-02-21 21:10:07,775 - baseline_adjustment - INFO - === Training BASELINE Adjustment Model ===
+2026-02-21 21:10:07,777 - baseline_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
+2026-02-21 21:10:07,777 - baseline_adjustment - INFO - Dtype: float64
+2026-02-21 21:10:07,777 - baseline_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
+2026-02-21 21:10:07,873 - baseline_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\..\src\../models/MultiModel.pt
+2026-02-21 21:10:07,874 - baseline_adjustment - INFO - Preparing adjustment data...
+2026-02-21 21:10:15,546 - baseline_adjustment - INFO - Data shape: sequences=torch.Size([245228, 20, 12]), targets=torch.Size([245228, 1]), input_dim=12
+2026-02-21 21:10:15,554 - baseline_adjustment - INFO - Chronological split: train < 2020-06-05T00:00:00.000000, train=179615, val=65613
+2026-02-21 21:10:15,554 - baseline_adjustment - INFO - Fitting KDE weights...
+2026-02-21 21:11:41,360 - baseline_adjustment - INFO - Building baseline model...
+2026-02-21 21:11:41,369 - baseline_adjustment - INFO - Model parameters: 58,689 total, 58,689 trainable
+2026-02-21 21:11:42,435 - baseline_adjustment - INFO - Optimizer: cwd (wd=0.01)
+2026-02-21 21:11:42,435 - baseline_adjustment - INFO - Training: epochs=1000, lr=0.001, batch_size=256
+2026-02-21 21:11:42,436 - baseline_adjustment - INFO - Save path: C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\models\baseline_cwd_AdjustmentModel.pt
+2026-02-21 21:14:19,231 - baseline_adjustment - INFO - Epoch 10/1000 - Train: 0.118513 - Val: 0.168682 - Best: 0.166988 - LR: 1.00e-03 - Time: 2.6min
+2026-02-21 21:16:55,021 - baseline_adjustment - INFO - Epoch 20/1000 - Train: 0.101919 - Val: 0.180496 - Best: 0.166988 - LR: 1.00e-03 - Time: 5.2min
+2026-02-21 21:19:35,344 - baseline_adjustment - INFO - Epoch 30/1000 - Train: 0.091330 - Val: 0.188343 - Best: 0.166988 - LR: 1.00e-03 - Time: 7.9min
+2026-02-21 21:22:18,465 - baseline_adjustment - INFO - Epoch 40/1000 - Train: 0.073564 - Val: 0.196744 - Best: 0.166060 - LR: 1.00e-03 - Time: 10.6min
+2026-02-21 21:25:02,995 - baseline_adjustment - INFO - Epoch 50/1000 - Train: 0.066333 - Val: 0.173098 - Best: 0.163719 - LR: 1.00e-03 - Time: 13.3min
+2026-02-21 21:27:39,443 - baseline_adjustment - INFO - Epoch 60/1000 - Train: 0.062002 - Val: 0.170619 - Best: 0.163299 - LR: 1.00e-03 - Time: 16.0min
+2026-02-21 21:30:15,784 - baseline_adjustment - INFO - Epoch 70/1000 - Train: 0.058129 - Val: 0.165293 - Best: 0.163299 - LR: 1.00e-03 - Time: 18.6min
+2026-02-21 21:32:53,042 - baseline_adjustment - INFO - Epoch 80/1000 - Train: 0.056912 - Val: 0.162816 - Best: 0.158247 - LR: 1.00e-03 - Time: 21.2min
+2026-02-21 21:35:29,548 - baseline_adjustment - INFO - Epoch 90/1000 - Train: 0.053986 - Val: 0.166002 - Best: 0.158247 - LR: 1.00e-03 - Time: 23.8min
+2026-02-21 21:38:09,951 - baseline_adjustment - INFO - Epoch 100/1000 - Train: 0.051628 - Val: 0.172045 - Best: 0.158247 - LR: 1.00e-03 - Time: 26.5min
+2026-02-21 21:40:49,358 - baseline_adjustment - INFO - Epoch 110/1000 - Train: 0.049593 - Val: 0.173046 - Best: 0.158247 - LR: 1.00e-03 - Time: 29.1min
+2026-02-21 21:43:25,740 - baseline_adjustment - INFO - Epoch 120/1000 - Train: 0.048737 - Val: 0.174462 - Best: 0.158247 - LR: 1.00e-03 - Time: 31.7min
+2026-02-21 21:46:00,281 - baseline_adjustment - INFO - Epoch 130/1000 - Train: 0.046039 - Val: 0.172894 - Best: 0.158247 - LR: 5.00e-04 - Time: 34.3min
+2026-02-21 21:48:36,032 - baseline_adjustment - INFO - Epoch 140/1000 - Train: 0.045004 - Val: 0.166460 - Best: 0.158247 - LR: 5.00e-04 - Time: 36.9min
+2026-02-21 21:51:12,456 - baseline_adjustment - INFO - Epoch 150/1000 - Train: 0.043911 - Val: 0.178875 - Best: 0.158247 - LR: 5.00e-04 - Time: 39.5min
+2026-02-21 21:53:52,751 - baseline_adjustment - INFO - Epoch 160/1000 - Train: 0.043879 - Val: 0.175324 - Best: 0.158247 - LR: 5.00e-04 - Time: 42.2min
+2026-02-21 21:56:30,472 - baseline_adjustment - INFO - Epoch 170/1000 - Train: 0.042834 - Val: 0.170852 - Best: 0.158247 - LR: 5.00e-04 - Time: 44.8min
+2026-02-21 21:56:45,847 - baseline_adjustment - INFO - Early stopping at epoch 171
+2026-02-21 21:56:45,847 - baseline_adjustment - INFO - Training complete: 45.1 minutes, best val loss: 0.158247
+2026-02-21 21:56:45,847 - baseline_adjustment - INFO - Final evaluation on validation set...
+2026-02-21 21:56:47,747 - baseline_adjustment - INFO - BASELINE model - RMSE: 0.144784, MAPE: 0.0913
+2026-02-21 21:56:47,747 - baseline_adjustment - INFO - Results saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\logs\baseline_cwd_results.json
+2026-02-21 21:56:47,749 - baseline_adjustment - INFO - Done.
