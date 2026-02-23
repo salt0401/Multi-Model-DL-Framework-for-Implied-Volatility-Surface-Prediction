@@ -72,44 +72,6 @@ def plot_iv_surface(tau, logm, tv_pred, save_path=None, title='Predicted IV Surf
     plt.close()
 
 
-def plot_smile_by_maturity(tau, logm, tv_pred, tv_true=None, save_path=None, n_slices=5):
-    """Plot IV smiles at different maturities."""
-    unique_taus = np.unique(tau)
-    if len(unique_taus) > n_slices:
-        indices = np.linspace(0, len(unique_taus)-1, n_slices, dtype=int)
-        selected_taus = unique_taus[indices]
-    else:
-        selected_taus = unique_taus
-
-    fig, axes = plt.subplots(1, len(selected_taus), figsize=(4*len(selected_taus), 4), sharey=True)
-    if len(selected_taus) == 1:
-        axes = [axes]
-
-    for ax, t in zip(axes, selected_taus):
-        mask = np.isclose(tau, t, atol=1e-6)
-        k_slice = logm[mask]
-        iv_slice = np.sqrt(np.maximum(tv_pred[mask], 0) / max(t, 1e-8))
-        sort_idx = np.argsort(k_slice)
-
-        ax.plot(k_slice[sort_idx], iv_slice[sort_idx], 'b-', label='Predicted')
-
-        if tv_true is not None:
-            iv_true_slice = np.sqrt(np.maximum(tv_true[mask], 0) / max(t, 1e-8))
-            ax.plot(k_slice[sort_idx], iv_true_slice[sort_idx], 'r.', label='Observed', markersize=3)
-
-        ax.set_title(f'tau={t:.4f}')
-        ax.set_xlabel('Log-Moneyness')
-        if ax == axes[0]:
-            ax.set_ylabel('Implied Volatility')
-        ax.legend(fontsize=7)
-
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f'Smile plot saved to {save_path}')
-    plt.close()
-
-
 def main():
     parser = ArgumentParser()
     parser.add_argument("--start_date", type=str, default=None)
@@ -160,9 +122,6 @@ def main():
     plot_iv_surface(taus, logms, tv_pred,
                     save_path=f'{plot_path}/iv_surface_pred.png',
                     title='Predicted IV Surface')
-
-    plot_smile_by_maturity(taus, logms, tv_pred, tv_true,
-                           save_path=f'{plot_path}/iv_smiles.png')
 
     results_path = f'{plot_path}/experiment_results.csv'
     test_df.to_csv(results_path)

@@ -246,8 +246,8 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
-    logger = setup_logging(log_dir, f'{args.model}_adjustment')
-    logger.info(f'=== Training {args.model.upper()} Adjustment Model ===')
+    logger = setup_logging(log_dir, f'{args.model}_{args.optimizer}_adjustment')
+    logger.info(f'=== Training {args.model.upper()} ({args.optimizer.upper()}) Adjustment Model ===')
     logger.info(f'Device: {device} (GPU: {torch.cuda.get_device_name(0) if use_gpu else "N/A"})')
     logger.info(f'Dtype: {args.dtype}')
     if args.ewc:

@@ -1,6 +1,0 @@
-2026-02-21 19:46:17,684 - tft_adjustment - INFO - === Training TFT Adjustment Model ===
-2026-02-21 19:46:17,686 - tft_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
-2026-02-21 19:46:17,686 - tft_adjustment - INFO - Dtype: float32
-2026-02-21 19:46:17,686 - tft_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
-2026-02-21 19:46:17,799 - tft_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\..\src\../models/MultiModel.pt
-2026-02-21 19:46:17,799 - tft_adjustment - INFO - Preparing adjustment data...
