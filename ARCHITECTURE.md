@@ -15,7 +15,7 @@
         |                  |                  |                  |
     Phase 1            Phase 2            Phase 3           Phase 4/5
     Base Model         ICNN Dupire        Adjustment         HyperIV / DDPM
-    (SSVI+NN)          Local Vol          (TFT+Attn)       (independent)
+    (eSSVI+NN)         Local Vol          (TFT+Attn)       (independent)
         |                  |                  |                  |
     MultiModel.pt    DupireICNN.pt      AdjModel.pt      HyperIV.pt / Diffusion.pt
         |                  |                  |                  |
@@ -95,25 +95,27 @@ PyTorch DataLoaders
 
 ## Model Architectures
 
-### Phase 1: Base Model (Additive Architecture)
+### Phase 1: Base Model (eSSVI + Additive NN Engine)
 
-> **Architecture decision (2026-02-20):** Additive formulation confirmed via A/B experiment. Multiplicative (`SSVI * NN`) explodes at epoch 2 due to product-rule cross-terms in butterfly constraint derivatives. See `logs/architecture_comparison.json`.
+> **Architecture decision (2026-02-23):** The model was upgraded from Gatheral's static SSVI to **eSSVI (extended SSVI)**. eSSVI introduces time-decaying correlation ($\rho$), allowing extreme negative skew for short-term options while maintaining smoothness for long maturities. To combat ATM data gravity preventing the optimizer from reaching extreme left-skew limits, the base formulation forces a frozen parameter `rho_0 = -0.95` during early epochs.
+
+> **Architecture decision (2026-02-20 & 02-24):** Additive formulation confirmed via A/B experiment. Multiplicative (`eSSVI * NN`) explodes at epoch 2 due to product-rule cross-terms. Furthermore, to prevent the NN gradient from vanishing in low-volatility regimes, the additive scaling factor was upgraded from $yATM$ to $\tilde{y}_{ATM} = \sqrt{yATM^2 + 0.02^2}$.
 
 ```
             (tau, logm, yATM)
                     |
          +----------+----------+
          |                     |
-     SSVIModel              SmileModel x5 ensemble
-     (logm, yATM)           (tau, logm)
+     eSSVIModel             SmileModel x5 ensemble
+     (tau, logm)            (tau, logm)
          |                     |
      output_Prior          output_NN
          |                     |
-         |              yATM * output_NN
+         |         yATM_tilde * output_NN
          |                     |
          +------( + )----------+
                  |
-          output = SSVI + yATM * NN   (additive)
+          output = eSSVI + yATM_tilde * NN   (additive)
                  |
           SoftmaxModel
           (learned weights, input: logm, tau, yATM)
@@ -123,14 +125,18 @@ PyTorch DataLoaders
           WeightedSumLoss
           = w1*RMSE + w2*MAPE + w3*calendar
             + w4*butterfly + w5*density + w6*upperbound
+
 ```
 
 **SingleModel forward (`model.py`):**
 ```python
-output = output_Prior + yATM * output_NN
-grad_ttm1 = grad_ttm1_prior + yATM * grad_ttm1_NN
-grad_logm1 = grad_logm1_prior + yATM * grad_logm1_NN
-grad_logm2 = grad_logm2_prior + yATM * grad_logm2_NN
+# epsilon is configurable via config.ini [model_sett] epsilon (currently 0.02)
+yATM_tilde = torch.sqrt(torch.square(yATM) + self.epsilon**2)
+
+output = output_Prior + yATM_tilde * output_NN
+grad_ttm1 = grad_ttm1_prior + yATM_tilde * grad_ttm1_NN
+grad_logm1 = grad_logm1_prior + yATM_tilde * grad_logm1_NN
+grad_logm2 = grad_logm2_prior + yATM_tilde * grad_logm2_NN
 ```
 No cross-terms in derivatives (unlike multiplicative product rule).
 
@@ -142,7 +148,8 @@ No cross-terms in derivatives (unlike multiplicative product rule).
 - Computes 2nd derivative via `autograd.grad(..., retain_graph=True)`
 - Returns 4-tuple: `(TV, grad_ttm, grad_logm1, grad_logm2)`
 
-**Loss components (weights `[1, 1, 10, 10, 10, 10]`):**
+**Loss components (Relaxed Weights: `[1.0, 1.0, 0.0, 0.0, 0.0, 0.0]`):**
+*The physics constraints (`calendar, butterfly, density, upperbound`) were traditionally set to `10.0`, but were zeroed out after proving the old model's underfitting issue on Deep OTM Puts was caused by the static SSVI formulation colliding with data gravity, not by the arbitrage penalties locking the network.*
 1. **RMSE** — Root mean squared error of total variance predictions
 2. **MAPE** — Mean absolute percentage error (with ε=0.005 stability)
 3. **Calendar** — penalizes `dw/dtau < 0` (variance must increase with time)
@@ -182,7 +189,7 @@ V2 — ICNN (Hard convexity guarantee):
     - Reference: Amos et al. (2017), ARBITER Legendre conjugate head
 
 V3 — Module D + GNO exploration:
-    - Module D: Vanna, Volga, ∂σ_LV/∂K from clean local vol → Model 3 (15-dim)
+    - Module D: Local Vol, Vanna, Volga, ∂σ_LV/∂K from clean local vol → Model 3 (16-dim)
     - GNO: offline-trained global mapping, 100x inference speedup
 ```
 
@@ -435,7 +442,7 @@ test_train_integration.py  10 tests   End-to-end training loops
 
 | Model | Status | Key Test Metric | Notes |
 |-------|--------|----------------|-------|
-| Base (SSVI+NN) | **Current** | Val loss 0.117 (pipeline 3ep), Butterfly 74% | prs_dataset_no_fat(clean), 2014-2020 |
+| Base (eSSVI+NN) | **Current** | Val loss 0.07495 (84 ep, early-stopped), SSVI healthy | prs_dataset_no_fat(clean), 2014-2020, ε=0.02 |
 | Adjustment (xLSTM) | **Arch. comparison done** | Val RMSE 0.1414, MAPE 9.01% | 39K params, highly efficient |
 | Adjustment (TFT+CPR) | **Arch. comparison done** | Val RMSE 0.1404, MAPE 8.89% | 265K params, **Best Model**, excellent interpretability |
 | Adjustment (GRU) | **Arch. comparison done** | Val RMSE 0.1477, MAPE 9.43% | 59K params, baseline reference |
@@ -471,11 +478,10 @@ test_train_integration.py  10 tests   End-to-end training loops
 | `src/utils.py` | Config loading, metrics, early stopping, seed |
 | `scripts/download_data.py` | Data download pipeline (FinMind + yfinance) |
 | `scripts/build_features.py` | Enhancement feature computation |
-| `model1_research/scripts/compare_architectures.py` | Additive vs multiplicative A/B test |
-| `model1_research/scripts/plot_smooth_iv_check.py` | Fixed-yATM smooth surface verification |
 | `scripts/plot_training_curves.py` | Training loss curve visualization |
-| `model1_research/scripts/inspect_ssvi_params.py` | SSVI parameter inspection |
-| `model1_research/scripts/diagnose_rho_gradient.py` | Per-loss rho gradient analysis |
+| `model1_research/scripts/generate_model1_plots.py` | Generates train/val/test IV fit plots and loss curve |
+| `model1_research/scripts/plot_smooth_iv_check.py` | Fixed-yATM smooth surface verification |
+| `model1_research/scripts/plot_pipeline_metrics.py` | Plots loss from pipeline metrics JSON |
 | `model1_research/scripts/train_diagnose.py` | Training with per-epoch parameter tracking |
 | `model3_research/tft_adjustment.py` | TFT adjustment model |
 | `model3_research/optimizers.py` | Custom optimizers (AdamCPR, CautiousAdamW) |

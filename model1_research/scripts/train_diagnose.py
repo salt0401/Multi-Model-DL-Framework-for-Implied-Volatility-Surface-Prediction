@@ -1,27 +1,30 @@
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 """Short diagnostic training: 4 epochs, log SSVI params + individual losses per epoch."""
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-
 import torch
 from torch import optim
 from tqdm import tqdm
 import numpy as np
 
-from model import MultiModel, WeightedSumLoss
-from dataset import DataProcessor
-from utils import load_config, parse_list_config, parse_date, set_seed
-from train import train_one_epoch, validate
+from model1_research.model import MultiModel, WeightedSumLoss
+from src.dataset import DataProcessor
+from src.utils import load_config, parse_list_config, parse_date, set_seed
+from model1_research.train import train_one_epoch, validate
 
 set_seed(42)
 torch.set_default_dtype(torch.float64)
 
 # ── Setup ───────────────────────────────────────────────────────────
-config = load_config(os.path.join(os.path.dirname(__file__), '..', 'src', 'config.ini'))
+config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'src', 'config.ini')
+if not os.path.exists(config_path):
+    raise FileNotFoundError(f"Config missing at {config_path}")
+config = load_config(config_path)
+
+# Fix relative paths dynamically
+data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'dataset'))
+config['data']['data_folder'] = data_dir + os.sep
 
 use_gpu = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_gpu else "cpu")
@@ -46,15 +49,17 @@ gradient_clip = config['training'].getfloat('gradient_clip')
 
 
 def get_ssvi_params(model):
-    """Extract SSVI parameters from all ensemble members."""
+    """Extract eSSVI parameters from all ensemble members."""
     params = []
     for i, single in enumerate(model.ensemble_list):
-        ssvi = single.Prior
-        rho = -torch.sigmoid(ssvi.raw_rho).item()
-        eta = 2 * torch.sigmoid(ssvi.raw_eta).item()
+        ssvi = getattr(single, 'Prior', None)
+        if ssvi is None: continue
+        rho_0 = torch.clamp(ssvi.raw_rho_0, -0.999, 0.999).item()
+        rho_inf = torch.clamp(ssvi.raw_rho_inf, -0.999, 0.999).item()
+        decay = torch.abs(ssvi.raw_decay).item()
+        eta = torch.abs(ssvi.raw_eta).item()
         gamma = torch.sigmoid(ssvi.raw_gamma).item()
-        params.append({'rho': rho, 'eta': eta, 'gamma': gamma,
-                       'raw_rho': ssvi.raw_rho.item()})
+        params.append({'rho_0': rho_0, 'rho_inf': rho_inf, 'decay': decay, 'eta': eta, 'gamma': gamma})
     return params
 
 
@@ -95,7 +100,7 @@ print("=" * 80)
 
 init_params = get_ssvi_params(model)
 for i, p in enumerate(init_params):
-    print(f"  Ensemble[{i}]: rho={p['rho']:.6f}, eta={p['eta']:.6f}, gamma={p['gamma']:.6f}")
+    print(f"  Ensemble[{i}]: rho_0={p['rho_0']:.6f}, rho_inf={p['rho_inf']:.6f}, decay={p['decay']:.6f}, eta={p['eta']:.6f}")
 
 init_losses = get_individual_losses(model, val_loader, c6_loader, loss_function, device)
 print(f"\n  Individual losses (val):")
@@ -115,14 +120,16 @@ for epoch in range(NUM_EPOCHS):
 
     print(f"\n--- Epoch {epoch+1}/{NUM_EPOCHS} --- Train: {train_loss:.4f}, Val: {val_loss:.4f}")
 
-    # SSVI params
+    # eSSVI params
     params = get_ssvi_params(model)
-    rhos = [p['rho'] for p in params]
+    rho_0 = [p['rho_0'] for p in params]
+    rho_inf = [p['rho_inf'] for p in params]
+    decays = [p['decay'] for p in params]
     etas = [p['eta'] for p in params]
-    gammas = [p['gamma'] for p in params]
-    print(f"  rho:   {['%.4f' % r for r in rhos]}  mean={np.mean(rhos):.4f}")
-    print(f"  eta:   {['%.4f' % e for e in etas]}  mean={np.mean(etas):.4f}")
-    print(f"  gamma: {['%.4f' % g for g in gammas]}  mean={np.mean(gammas):.4f}")
+    print(f"  rho_0:   {['%.4f' % r for r in rho_0]}  mean={np.mean(rho_0):.4f}")
+    print(f"  rho_inf: {['%.4f' % r for r in rho_inf]}  mean={np.mean(rho_inf):.4f}")
+    print(f"  decay:   {['%.4f' % d for d in decays]}  mean={np.mean(decays):.4f}")
+    print(f"  eta:     {['%.4f' % e for e in etas]}  mean={np.mean(etas):.4f}")
 
     # Individual losses
     ind_losses = get_individual_losses(model, val_loader, c6_loader, loss_function, device)
@@ -138,19 +145,21 @@ final_params = get_ssvi_params(model)
 for i in range(ensemble_num):
     ip = init_params[i]
     fp = final_params[i]
-    drho = fp['rho'] - ip['rho']
+    drho_0 = fp['rho_0'] - ip['rho_0']
+    drho_inf = fp['rho_inf'] - ip['rho_inf']
+    ddecay = fp['decay'] - ip['decay']
     deta = fp['eta'] - ip['eta']
-    dgamma = fp['gamma'] - ip['gamma']
-    print(f"  Ensemble[{i}]: rho {ip['rho']:.4f} -> {fp['rho']:.4f} ({drho:+.4f})"
-          f"  eta {ip['eta']:.4f} -> {fp['eta']:.4f} ({deta:+.4f})"
-          f"  gamma {ip['gamma']:.4f} -> {fp['gamma']:.4f} ({dgamma:+.4f})")
+    print(f"  Ensemble[{i}]: rho_0 {ip['rho_0']:.4f} -> {fp['rho_0']:.4f} ({drho_0:+.4f}) "
+          f"rho_inf {ip['rho_inf']:.4f} -> {fp['rho_inf']:.4f} ({drho_inf:+.4f}) "
+          f"decay {ip['decay']:.4f} -> {fp['decay']:.4f} ({ddecay:+.4f}) "
+          f"eta {ip['eta']:.4f} -> {fp['eta']:.4f} ({deta:+.4f})")
 
-rho_changes = [final_params[i]['rho'] - init_params[i]['rho'] for i in range(ensemble_num)]
-mean_change = np.mean(rho_changes)
-print(f"\n  Mean rho change: {mean_change:+.6f}")
+rho0_changes = [final_params[i]['rho_0'] - init_params[i]['rho_0'] for i in range(ensemble_num)]
+mean_change = np.mean(rho0_changes)
+print(f"\n  Mean rho_0 change: {mean_change:+.6f}")
 if mean_change < 0:
-    print("  -> rho moving MORE negative (correct direction for left-skew)")
+    print("  -> rho_0 moving MORE negative (correct direction for left-skew)")
 else:
-    print("  -> rho moving LESS negative (still problematic)")
+    print("  -> rho_0 moving LESS negative (still problematic)")
 
 print()

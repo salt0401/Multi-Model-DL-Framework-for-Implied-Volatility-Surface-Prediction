@@ -91,7 +91,7 @@ for col, tau_val in enumerate(tau_values):
     ax.grid(True, alpha=0.3)
     ax.set_ylim(bottom=0)
 
-fig.suptitle('Fixed yATM → Smooth logm sweep (SSVI surface test)\n'
+fig.suptitle('Fixed yATM → Smooth logm sweep (eSSVI surface test)\n'
              'If smooth: model is correct, zigzag was from mixed yATM in plots\n'
              'If jagged: SmileNN is overfitting',
              fontsize=12, fontweight='bold')

@@ -75,8 +75,8 @@ def main():
         'K_norm': K_flat,
         'tau': tau_flat,
         'local_vol': features['local_vol'].cpu().numpy().flatten(),
-        'vanna_proxy': features['vanna'].cpu().numpy().flatten(),
-        'volga_proxy': features['volga'].cpu().numpy().flatten(),
+        'vanna': features['vanna'].cpu().numpy().flatten(),
+        'volga': features['volga'].cpu().numpy().flatten(),
         'lv_gradient_K': features['lv_gradient_K'].cpu().numpy().flatten()
     })
     
@@ -87,8 +87,8 @@ def main():
     
     # Print some stats to verify sanity (no infs/nans)
     logger.info(f"Local Vol Mean:  {output_df['local_vol'].mean():.4f}")
-    logger.info(f"Vanna Proxy Mean: {output_df['vanna_proxy'].mean():.4f}")
-    logger.info(f"Volga Proxy Mean: {output_df['volga_proxy'].mean():.4f}")
+    logger.info(f"Vanna Mean: {output_df['vanna'].mean():.4f}")
+    logger.info(f"Volga Mean: {output_df['volga'].mean():.4f}")
 
 if __name__ == "__main__":
     main()

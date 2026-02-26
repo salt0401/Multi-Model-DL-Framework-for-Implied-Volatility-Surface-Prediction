@@ -1,17 +1,5 @@
 # SSVI Model Discussion Notes
 
-> Last updated: 2026-02-21
-
----
-
-## 1. Resolved Issues
-
-### 1.2 eta/gamma bounded parameterization
-- **Problem**: `eta = exp(raw_eta)` caused eta explosion during training (1.0 -> 31.18 in 10 epochs).
-- **Fix**: `eta = 2 * sigmoid(raw_eta)` in (0, 2), `gamma = sigmoid(raw_gamma)` in (0, 1).
-- **File**: `src/model.py` lines 40-41
-- **Reasoning**: Gatheral & Jacquier (2014) no-butterfly-arbitrage condition requires `eta * (1 + |rho|) < 2`. Bounded parameterization prevents violation.
-- **Note**: The joint constraint `eta * (1 + |rho|) < 2` is not strictly enforced yet. Currently eta < 2 independently and rho < 0 independently. This is sufficient for now but could be tightened.
 
 ---
 
@@ -53,10 +41,7 @@ The `prs_dataset_full` dataset extends from 2014-2021 to 2014-2026. The 2014-202
 - **Status**: Research phase. Literature review complete. Implementation pending.
 - **Files**: `model3_research/overfitting_research/README.md`, `model3_research/overfitting_research/cwd_notes.md`, `model3_research/parameter_dynamic_analysis_and_regularization.txt`
 
-### 3.3 Gatheral-Jacquier joint constraint
-- Current: `eta < 2` and `rho < 0` independently.
-- Ideal: `eta * (1 + |rho|) < 2` jointly enforced.
-- Status: Not yet implemented. Current bounds are sufficient in practice but not theoretically tight.
+
 
 ### ~~3.4 Adjustment model data leakage~~ → Resolved (2026-02-20)
 - **Problem**: `train_adjustment.py` used `torch.utils.data.random_split` for train/val split. This caused three types of temporal data leakage:
@@ -67,7 +52,7 @@ The `prs_dataset_full` dataset extends from 2014-2021 to 2014-2026. The 2014-202
   1. `dataset.py:prepare_adjustment_data` now returns per-sequence dates. `train_adjustment.py` splits chronologically (first 80% of dates → train, last 20% → val).
   2. `adjustment.py:fit_kde_weights` now only fits KDE on train targets. Val weights are computed via `eval_kde_weights` using the train-fitted KDE, preventing val target distribution leakage.
 - **Files**: `src/dataset.py`, `src/train_adjustment.py`, `src/adjustment.py`
-- **Note**: Models 1 (SSVI+NN), 4 (HyperIV), 5 (DDPM) already used chronological split. Only Model 3 (Adjustment) had this bug.
+- **Note**: Models 1 (eSSVI+NN), 4 (HyperIV), 5 (DDPM) already used chronological split. Only Model 3 (Adjustment) had this bug.
 
 ### ~~3.5 Additive vs multiplicative architecture~~ → Resolved (2026-02-20)
 - **Decision**: **Additive architecture confirmed** via 8-epoch A/B experiment.
@@ -84,7 +69,7 @@ The `prs_dataset_full` dataset extends from 2014-2021 to 2014-2026. The 2014-202
   - Train loss convergence rate: -8.1% (ep1→2), -3.0% (ep2→3), -0.26% (ep5→6) — diminishing returns
   - Val loss **increases** from epoch 1 (0.117) to epoch 8 (0.183) — overfitting
   - Val/Train gap grows from 1.46x (ep1) to 2.64x (ep8)
-  - MAPE ~7% is the structural floor of the SSVI+NN additive architecture (MAPE accounts for 97% of the loss; constraints are ~0%)
+  - MAPE ~7% is the structural floor of the eSSVI+NN additive architecture (MAPE accounts for 97% of the loss; constraints are ~0%)
 - **Root cause of rapid convergence**: SSVI prior provides ~97% of the loss structure. The NN correction, scaled by yATM (median ~0.005), is inherently small. The constraints are satisfied by the SSVI prior alone.
 - **Path to further improvement**: Not more epochs, but better models (HyperIV already achieves MAPE 20% on the full surface).
 
@@ -94,10 +79,10 @@ The `prs_dataset_full` dataset extends from 2014-2021 to 2014-2026. The 2014-202
 
 | File | Purpose |
 |------|---------|
-| `src/model.py` | Model architecture (SSVI, SmileNN, MultiModel, losses) |
-| `src/dataset.py` | Data processing, per-date y_atm computation |
+| `model1_research/model.py` | Model architecture (eSSVI, SmileNN, MultiModel, losses) |
+| `src/dataset.py` | Data preprocessing, dataloaders |
+| `model1_research/train.py` | Training loop |
 | `src/config.ini` | Training configuration |
-| `src/train.py` | Training loop |
 | `src/utils.py` | Config loading, seed setting utilities |
 | `scripts/plot_smooth_iv_check.py` | Fixed-yATM smooth surface verification |
 | `scripts/inspect_ssvi_params.py` | SSVI parameter inspection |

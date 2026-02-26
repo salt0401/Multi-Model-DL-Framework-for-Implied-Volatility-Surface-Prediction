@@ -1,8 +1,17 @@
 """Dupire PINN training with collocation resampling and autograd PDE.
 
 Trains dual-network (PriceNetwork + LocalVolNetwork) on Dupire PDE constraint.
-V1 prototype uses Black-Scholes synthetic data for validation.
+Supports two data source modes:
+  - Synthetic BS mode (default): uses Black-Scholes formula for pipeline validation
+  - Model 1 mode (--use_model1): queries pre-trained MultiModel for real IV surface targets
 """
+import sys
+import os
+
+# Add paths for cross-module imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'model1_research'))
+
 from dupire_pinn import (
     PriceNetwork, ICNNPriceNetwork, LocalVolNetwork, DupirePINNLoss, DupireSampler, bs_call_price
 )
@@ -13,16 +22,18 @@ import gc
 import torch
 from torch import optim
 import numpy as np
-import os
 
 
-def train_dupire(config, device, logger):
+def train_dupire(config, device, logger, base_model=None, yATM=None):
     """Train Dupire PINN local vol extractor.
 
     Args:
         config: ConfigParser object
         device: torch device
         logger: logging.Logger
+        base_model: (optional) pre-trained Model 1 MultiModel. If provided,
+                    the sampler queries Model 1 for real targets instead of BS.
+        yATM: (optional) ATM total variance scalar. Required if base_model is set.
     """
     cfg = config['dupire']
     hidden_dim = cfg.getint('hidden_dim')
@@ -74,12 +85,21 @@ def train_dupire(config, device, logger):
         lambda_smooth=lambda_smooth
     )
 
-    # Sampler
-    sampler = DupireSampler(
-        K_min=K_min, K_max=K_max, tau_min=tau_min, tau_max=tau_max,
-        n_interior=n_interior, n_boundary=n_boundary,
-        strike=1.0, sigma_bs=sigma_bs
-    )
+    # Sampler (Model 1 mode or synthetic BS mode)
+    if base_model is not None:
+        logger.info(f"Using Model 1 mode: querying MultiModel for targets (yATM={yATM:.6f})")
+        sampler = DupireSampler(
+            K_min=K_min, K_max=K_max, tau_min=tau_min, tau_max=tau_max,
+            n_interior=n_interior, n_boundary=n_boundary,
+            strike=1.0, base_model=base_model, yATM=yATM
+        )
+    else:
+        logger.info(f"Using synthetic BS mode: sigma_bs={sigma_bs:.4f}")
+        sampler = DupireSampler(
+            K_min=K_min, K_max=K_max, tau_min=tau_min, tau_max=tau_max,
+            n_interior=n_interior, n_boundary=n_boundary,
+            strike=1.0, sigma_bs=sigma_bs
+        )
 
     # Optimizer (joint over both networks)
     all_params = list(price_net.parameters()) + list(localvol_net.parameters())
@@ -148,7 +168,7 @@ def train_dupire(config, device, logger):
 
     logger.info(f'Best total loss: {best_total_loss:.6f}')
 
-    # Validation: compute local vol on a grid and compare with known sigma
+    # Validation: compute local vol on a grid
     price_net.eval()
     localvol_net.eval()
     with torch.no_grad():
@@ -157,17 +177,71 @@ def train_dupire(config, device, logger):
         sigma2_pred = localvol_net(K_val, tau_val).cpu().numpy().flatten()
         sigma_pred = np.sqrt(sigma2_pred)
 
-    logger.info(f'Validation local vol (mean): {sigma_pred.mean():.4f} '
-                f'(expected ~{sigma_bs:.4f})')
-    logger.info(f'Validation local vol (std): {sigma_pred.std():.6f}')
+    logger.info(f'Validation local vol (mean): {sigma_pred.mean():.4f}')
+    logger.info(f'Validation local vol (std):  {sigma_pred.std():.6f}')
+    if base_model is None:
+        logger.info(f'  (synthetic BS expected ~{sigma_bs:.4f})')
+    else:
+        logger.info(f'  (Model 1 mode — no single expected value)')
 
     return price_net, localvol_net
+
+
+def _load_model1(config, device, logger):
+    """Load pre-trained Model 1 (MultiModel) and compute yATM from dataset.
+
+    Args:
+        config: ConfigParser with [model_sett] and [save_path] sections
+        device: torch device
+        logger: logging.Logger
+
+    Returns:
+        (base_model, yATM): loaded MultiModel in eval mode and mean ATM total variance
+    """
+    from model import MultiModel
+    from dataset import DataProcessor
+
+    # Build MultiModel with the same architecture as training
+    hidden_sizes = [int(x) for x in config['model_sett']['hidden_sizes'].split(',')]
+    ensemble_num = config['model_sett'].getint('ensemble_num')
+    epsilon = config['model_sett'].getfloat('epsilon', fallback=0.01)
+
+    base_model = MultiModel(
+        hidden_sizes=hidden_sizes, ensemble_num=ensemble_num, epsilon=epsilon
+    ).double().to(device)
+
+    # Load checkpoint
+    model_path = config['save_path']['model_path']
+    logger.info(f'Loading Model 1 from: {model_path}')
+    state_dict = torch.load(model_path, map_location=device, weights_only=True)
+    base_model.load_state_dict(state_dict)
+    base_model.eval()
+    logger.info(f'Model 1 loaded successfully ({sum(p.numel() for p in base_model.parameters()):,} params)')
+
+    # Compute yATM from the dataset
+    # yATM is the ATM total variance per day. We use the mean across the training set
+    # as a representative scalar for the surface calibration.
+    logger.info('Computing mean yATM from dataset...')
+    dp = DataProcessor(config)
+    dp()  # triggers preprocess() + synthesize() + getYATM()
+    # DataProcessor stores its data in self.prs_dataset, column name is 'y_atm'
+    df = dp.prs_dataset
+    yATM_values = df['y_atm'].values
+    yATM_mean = float(np.mean(yATM_values))
+    logger.info(f'Dataset y_atm: mean={yATM_mean:.6f}, std={np.std(yATM_values):.6f}, '
+                f'min={np.min(yATM_values):.6f}, max={np.max(yATM_values):.6f}')
+
+    return base_model, yATM_mean
 
 
 def main():
     parser = ArgumentParser()
     parser.add_argument("--on_gpu", action='store_true')
     parser.add_argument("--use_icnn", action='store_true', help="Use ICNN architecture for PriceNetwork")
+    parser.add_argument("--use_model1", action='store_true',
+                        help="Use pre-trained Model 1 as target source (production mode)")
+    parser.add_argument("--yATM", type=float, default=None,
+                        help="Override yATM value (default: computed from dataset mean)")
     parser.add_argument("--finetune", type=str, default=None,
                         help='Path to pretrained checkpoint for transfer learning')
     args = parser.parse_args()
@@ -188,7 +262,21 @@ def main():
     logger.info(f'Device: {device}')
     logger.info(f'Float64 mode enabled')
 
-    price_net, localvol_net = train_dupire(config, device, logger)
+    # Load Model 1 if requested
+    base_model = None
+    yATM = None
+    if args.use_model1:
+        logger.info('='*60)
+        logger.info('Model 1 mode: loading pre-trained MultiModel...')
+        logger.info('='*60)
+        base_model, yATM_computed = _load_model1(config, device, logger)
+        yATM = args.yATM if args.yATM is not None else yATM_computed
+        logger.info(f'Final yATM for training: {yATM:.6f}')
+    else:
+        logger.info('Synthetic BS mode (use --use_model1 for production training)')
+
+    price_net, localvol_net = train_dupire(config, device, logger,
+                                           base_model=base_model, yATM=yATM)
     logger.info('Dupire PINN training complete.')
 
 

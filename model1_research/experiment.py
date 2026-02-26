@@ -106,7 +106,8 @@ def main():
     model_path = config['save_path']['model_path']
     hidden_sizes = [int(x) for x in parse_list_config(config['model_sett']['hidden_sizes'], int)]
     ensemble_num = config['model_sett'].getint('ensemble_num')
-    model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num).to(device)
+    epsilon = config['model_sett'].getfloat('epsilon', fallback=0.01)
+    model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num, epsilon=epsilon).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
 
     print('Running inference...')

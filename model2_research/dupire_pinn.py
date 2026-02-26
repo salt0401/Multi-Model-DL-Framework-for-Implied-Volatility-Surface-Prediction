@@ -312,10 +312,34 @@ class DupireSampler:
 
     Generates interior points for PDE constraint and boundary points
     for boundary conditions (tau=0 payoff, K extremes).
+
+    Two modes:
+      - Synthetic BS mode (default): uses Black-Scholes formula with fixed sigma
+        for pipeline validation.
+      - Model 1 mode: queries a pre-trained MultiModel to get total variance
+        predictions, then converts them to call prices. This is the production
+        pipeline for real training.
     """
 
     def __init__(self, K_min=0.5, K_max=1.5, tau_min=0.02, tau_max=2.0,
-                 n_interior=5000, n_boundary=500, strike=1.0, sigma_bs=0.2):
+                 n_interior=5000, n_boundary=500, strike=1.0, sigma_bs=0.2,
+                 base_model=None, yATM=None):
+        """Initialize sampler.
+
+        Args:
+            K_min: minimum normalized strike
+            K_max: maximum normalized strike
+            tau_min: minimum time-to-expiry
+            tau_max: maximum time-to-expiry
+            n_interior: number of interior collocation points
+            n_boundary: number of boundary points
+            strike: spot price (normalized, default 1.0)
+            sigma_bs: BS volatility for synthetic mode (ignored in Model 1 mode)
+            base_model: (optional) pre-trained Model 1 MultiModel instance.
+                        If provided, switches to Model 1 mode.
+            yATM: (optional) ATM total variance scalar or tensor.
+                  Required when base_model is provided.
+        """
         self.K_min = K_min
         self.K_max = K_max
         self.tau_min = tau_min
@@ -324,19 +348,67 @@ class DupireSampler:
         self.n_boundary = n_boundary
         self.strike = strike
         self.sigma_bs = sigma_bs
+        self.base_model = base_model
+        self.yATM = yATM
+
+        if base_model is not None and yATM is None:
+            raise ValueError(
+                "yATM must be provided when using Model 1 mode. "
+                "Pass a scalar (e.g. mean ATM total variance from the dataset)."
+            )
+
+    def _query_model1(self, K, tau, device):
+        """Query Model 1 for call prices at given (K, tau) points.
+
+        Pipeline: K → logm → MultiModel(tau, logm, yATM) → tv_pred → C_target
+
+        Note: Model 1's SmileModel internally uses autograd.grad(create_graph=True)
+        to compute first/second derivatives, so inputs MUST have requires_grad=True
+        and we cannot wrap the call in torch.no_grad().
+
+        Args:
+            K: (n, 1) normalized strike prices (detached)
+            tau: (n, 1) time-to-expiry (detached)
+            device: torch device
+
+        Returns:
+            C_target: (n, 1) call prices derived from Model 1's total variance
+        """
+        # Convert K to log-moneyness: logm = ln(K / S), S = strike = 1.0
+        logm = torch.log(K / self.strike)
+
+        # Prepare yATM broadcast to batch size
+        if isinstance(self.yATM, (int, float)):
+            yATM_batch = torch.full_like(tau, self.yATM)
+        else:
+            yATM_batch = self.yATM.expand_as(tau)
+
+        # SmileModel.forward uses autograd.grad(create_graph=True) internally,
+        # so inputs must have requires_grad=True. We enable grad, query, then detach.
+        tau_q = tau.clone().requires_grad_(True)
+        logm_q = logm.clone().requires_grad_(True)
+
+        tv_pred, _, _, _ = self.base_model(tau_q, logm_q, yATM_batch)
+        tv_pred = tv_pred.detach()  # Sever Model 1's computation graph
+
+        # Convert total variance → call price via Black-Scholes
+        C_target = _total_variance_to_call_price_tensor(
+            tv_pred, K, self.strike, tau
+        )
+        return C_target
 
     def sample(self, device='cpu'):
         """Sample domain points. Returns dict of tensors.
 
         Interior points: random (K, tau) in domain, with requires_grad=True
         Boundary points at tau → 0: C(K, 0) = max(S - K, 0)
-        Target prices: Black-Scholes prices for known-good validation
+        Target prices: from Model 1 (production) or Black-Scholes (validation)
 
         Returns:
             dict with keys:
                 K_interior, tau_interior: (n_interior, 1) with requires_grad
                 K_boundary, tau_boundary, C_boundary: (n_boundary, 1)
-                C_target: (n_interior, 1) BS target prices for fit loss
+                C_target: (n_interior, 1) target call prices for fit loss
         """
         # Interior points: (K, tau) in domain
         K_int = (torch.rand(self.n_interior, 1) *
@@ -346,10 +418,17 @@ class DupireSampler:
         K_int.requires_grad_(True)
         tau_int.requires_grad_(True)
 
-        # Compute BS target prices for interior points
-        C_target = _bs_call_price_tensor(
-            K_int.detach(), self.strike, tau_int.detach(), self.sigma_bs
-        ).to(device)
+        # Compute target prices
+        if self.base_model is not None:
+            # ── Model 1 mode: query pre-trained MultiModel ──
+            C_target = self._query_model1(
+                K_int.detach(), tau_int.detach(), device
+            ).to(device)
+        else:
+            # ── Synthetic BS mode: for pipeline validation only ──
+            C_target = _bs_call_price_tensor(
+                K_int.detach(), self.strike, tau_int.detach(), self.sigma_bs
+            ).to(device)
 
         # Boundary points at tau → 0: payoff = max(S - K, 0)
         K_bnd = (torch.rand(self.n_boundary, 1) *
@@ -390,6 +469,38 @@ def _bs_call_price_tensor(K, S, tau, sigma, r=0.0):
 
     d1 = (np.log(S / K_np) + (r + 0.5 * sigma ** 2) * tau_np) / (sigma * np.sqrt(tau_np))
     d2 = d1 - sigma * np.sqrt(tau_np)
+
+    price = S * norm.cdf(d1) - K_np * np.exp(-r * tau_np) * norm.cdf(d2)
+    return torch.tensor(price, dtype=torch.float64)
+
+
+def _total_variance_to_call_price_tensor(w, K, S, tau, r=0.0):
+    """Convert Model 1's total variance to call prices via BS formula.
+
+    This is the tensor-compatible bridge between Model 1 output (total variance)
+    and Model 2 input (call prices). Uses numpy internally for norm.cdf.
+
+    Args:
+        w: (batch, 1) total variance = IV² × τ (tensor)
+        K: (batch, 1) strike prices (tensor)
+        S: scalar spot price
+        tau: (batch, 1) time to expiry (tensor)
+        r: risk-free rate
+
+    Returns:
+        (batch, 1) call prices
+    """
+    w_np = w.detach().cpu().numpy()
+    K_np = K.detach().cpu().numpy()
+    tau_np = tau.detach().cpu().numpy()
+    tau_np = np.maximum(tau_np, 1e-10)
+
+    # total variance → implied volatility
+    iv = np.sqrt(np.maximum(w_np, 0) / tau_np)
+    iv = np.maximum(iv, 1e-10)  # avoid division by zero
+
+    d1 = (np.log(S / K_np) + (r + 0.5 * iv ** 2) * tau_np) / (iv * np.sqrt(tau_np))
+    d2 = d1 - iv * np.sqrt(tau_np)
 
     price = S * norm.cdf(d1) - K_np * np.exp(-r * tau_np) * norm.cdf(d2)
     return torch.tensor(price, dtype=torch.float64)

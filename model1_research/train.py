@@ -1,11 +1,10 @@
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from model import MultiModel, WeightedSumLoss
-from dataset import DataProcessor
-from utils import load_config, parse_list_config, parse_date, set_seed, setup_logging, MetricsTracker, EarlyStopping
+from model1_research.model import MultiModel, WeightedSumLoss
+from src.dataset import DataProcessor
+from src.utils import load_config, parse_list_config, parse_date, set_seed, setup_logging, MetricsTracker, EarlyStopping
 
 from argparse import ArgumentParser
 
@@ -151,9 +150,10 @@ def main():
     ensemble_num = config['model_sett'].getint('ensemble_num')
     hidden_sizes = [int(x) for x in parse_list_config(config['model_sett']['hidden_sizes'], int)]
     loss_weights = parse_list_config(config['model_sett']['loss_weights'])
+    epsilon = config['model_sett'].getfloat('epsilon', fallback=0.01)
 
     torch.set_default_dtype(torch.float64)
-    model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num).to(device)
+    model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num, epsilon=epsilon).to(device)
     # Bug T2 fixed: pass weights list instead of device
     loss_function = WeightedSumLoss(weights=loss_weights).to(device)
 
@@ -185,12 +185,20 @@ def main():
     early_stopping = EarlyStopping(patience=patience)
 
     logger.info('Training...')
-    best_loss = config['model_sett'].getfloat('best_loss')
+    best_loss = config['model_sett'].getfloat('best_loss', fallback=float('inf'))
     model_path = config['save_path']['model_path']
     plot_path = config['save_path']['plot_path']
     os.makedirs(plot_path, exist_ok=True)
 
     for epoch in range(epochs):
+        # Unfreeze rho_0 after epoch 50
+        unfreeze_epoch = config['training'].getint('rho_unfreeze_epoch', fallback=50)
+        if epoch == unfreeze_epoch:
+            logger.info(f"Epoch {epoch}: Unfreezing raw_rho_0 for all ensemble members.")
+            for single_model in model.ensemble_list:
+                if hasattr(single_model.Prior, 'raw_rho_0'):
+                    single_model.Prior.raw_rho_0.requires_grad = True
+
         train_loss = train_one_epoch(model, train_loader, c6_loader, loss_function, optimizer, device, gradient_clip)
         val_loss = validate(model, val_loader, c6_loader, loss_function, device)
 

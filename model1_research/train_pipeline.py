@@ -14,7 +14,6 @@ Adds SSVI diagnostics and transition validation between stages.
 from model import MultiModel, WeightedSumLoss
 from dataset import DataProcessor
 from train import train_one_epoch, validate
-from adjustment import TVAdjustmentModel, AdjustmentLoss
 from utils import (load_config, parse_list_config, parse_date, set_seed,
                    setup_logging, MetricsTracker, EarlyStopping, compute_rmse, compute_mape)
 
@@ -62,8 +61,13 @@ def extract_ssvi_params(model):
         ssvi = single.Prior
         entry = {'member': i}
 
-        raw_rho = ssvi.raw_rho.item()
-        rho = -torch.sigmoid(ssvi.raw_rho).item()
+        if hasattr(ssvi, 'raw_rho_0'):
+            raw_rho = ssvi.raw_rho_0.item()
+            rho = -torch.sigmoid(ssvi.raw_rho_0).item()
+        else:
+            raw_rho = ssvi.raw_rho.item()
+            rho = -torch.sigmoid(ssvi.raw_rho).item()
+            
         entry['raw_rho'] = raw_rho
         entry['rho'] = rho
 
@@ -225,8 +229,9 @@ def train_stage1(config, device, logger, epochs=3, dp=None):
     ensemble_num = config['model_sett'].getint('ensemble_num')
     hidden_sizes = [int(x) for x in parse_list_config(config['model_sett']['hidden_sizes'], int)]
     loss_weights = parse_list_config(config['model_sett']['loss_weights'])
+    epsilon = config['model_sett'].getfloat('epsilon', fallback=0.01)
 
-    model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num).to(device)
+    model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num, epsilon=epsilon).to(device)
     loss_function = WeightedSumLoss(weights=loss_weights).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
 
@@ -253,6 +258,14 @@ def train_stage1(config, device, logger, epochs=3, dp=None):
 
     logger.info(f'Training for {epochs} epochs...')
     for epoch in range(epochs):
+        # Unfreeze rho_0 after epoch 50
+        unfreeze_epoch = config['training'].getint('rho_unfreeze_epoch', fallback=50)
+        if epoch == unfreeze_epoch:
+            logger.info(f"Epoch {epoch}: Unfreezing raw_rho_0 for all ensemble members.")
+            for single_model in model.ensemble_list:
+                if hasattr(single_model.Prior, 'raw_rho_0'):
+                    single_model.Prior.raw_rho_0.requires_grad = True
+
         train_loss = train_one_epoch(model, train_loader, c6_loader,
                                      loss_function, optimizer, device, gradient_clip)
         val_loss = validate(model, val_loader, c6_loader, loss_function, device)
@@ -310,225 +323,21 @@ def train_stage1(config, device, logger, epochs=3, dp=None):
     return model, val_loader, report
 
 
-# ---------------------------------------------------------------------------
-# Step 4: Stage 2 - Train Adjustment Model
-# ---------------------------------------------------------------------------
-def train_stage2(config, device, logger, base_model, dp, epochs=None):
-    """Train GRU+Attention adjustment model. Returns report_dict."""
-    logger.info('=' * 60)
-    logger.info('STAGE 2: Training Adjustment Model')
-    logger.info('=' * 60)
 
-    adj_cfg = config['adjustment']
-    if epochs is None:
-        epochs = adj_cfg.getint('epochs')
-    sequence_length = adj_cfg.getint('sequence_length')
-
-    # Prepare adjustment data (chunked inference to avoid GPU OOM)
-    logger.info('Preparing adjustment data (chunked inference)...')
-    result = dp.prepare_adjustment_data(base_model, device, sequence_length)
-    sequences, targets, masks, seq_dates = result
-
-    if sequences is None:
-        logger.error('Failed to prepare adjustment data (VIX file missing?)')
-        return {'error': 'data_preparation_failed'}
-
-    logger.info(f'Adjustment data: sequences={sequences.shape}, targets={targets.shape}')
-
-    # Log input feature statistics
-    feat_names = ['vix_change', 'underlying_return', 'logm', 'tau', 'tv_pred', 'itm_otm']
-    # The actual feature count may be larger if enhancement features are present
-    n_features = sequences.shape[-1]
-    if n_features > len(feat_names):
-        feat_names += [f'enhance_{i}' for i in range(n_features - len(feat_names))]
-
-    # Use last timestep of each sequence for statistics (most meaningful)
-    last_step = sequences[:, -1, :].numpy()
-    feat_stats = {}
-    for i, name in enumerate(feat_names[:n_features]):
-        col = last_step[:, i]
-        feat_stats[name] = {
-            'mean': float(np.mean(col)), 'std': float(np.std(col)),
-            'min': float(np.min(col)), 'max': float(np.max(col)),
-            'nan_count': int(np.isnan(col).sum()),
-        }
-        logger.info(f'  Feature {name}: mean={feat_stats[name]["mean"]:.4f}, '
-                    f'std={feat_stats[name]["std"]:.4f}, '
-                    f'range=[{feat_stats[name]["min"]:.4f}, {feat_stats[name]["max"]:.4f}]')
-
-    # Log target distribution
-    tgt = targets.numpy().flatten()
-    target_stats = {
-        'mean': float(np.mean(tgt)), 'std': float(np.std(tgt)),
-        'min': float(np.min(tgt)), 'max': float(np.max(tgt)),
-        'p5': float(np.percentile(tgt, 5)), 'p50': float(np.percentile(tgt, 50)),
-        'p95': float(np.percentile(tgt, 95)),
-    }
-    logger.info(f'  Target (tv_ratio): mean={target_stats["mean"]:.4f}, '
-                f'std={target_stats["std"]:.4f}, '
-                f'p5={target_stats["p5"]:.4f}, p50={target_stats["p50"]:.4f}, '
-                f'p95={target_stats["p95"]:.4f}')
-
-    # Chronological split: first 80% dates -> train, last 20% -> val
-    unique_dates = np.sort(np.unique(seq_dates))
-    split_idx = int(len(unique_dates) * 0.8)
-    val_start_date = unique_dates[split_idx]
-
-    train_mask = seq_dates < val_start_date
-    val_mask = seq_dates >= val_start_date
-    logger.info(f'Chronological split: train={train_mask.sum()}, val={val_mask.sum()}, '
-                f'val starts {val_start_date}')
-
-    # KDE fit on train targets only (preventing leakage)
-    logger.info('Fitting KDE weights (train-only)...')
-    loss_fn = AdjustmentLoss(
-        kde_bandwidth=adj_cfg.getfloat('kde_bandwidth'), mape_weight=0.5)
-    train_kde_weights = loss_fn.fit_kde_weights(targets[train_mask].numpy())
-    val_kde_weights = loss_fn.eval_kde_weights(targets[val_mask].numpy())
-
-    # DataLoaders
-    batch_size = adj_cfg.getint('batch_size')
-    train_ds = TensorDataset(
-        sequences[train_mask], targets[train_mask], masks[train_mask],
-        torch.tensor(train_kde_weights, dtype=torch.float64))
-    val_ds = TensorDataset(
-        sequences[val_mask], targets[val_mask], masks[val_mask],
-        torch.tensor(val_kde_weights, dtype=torch.float64))
-
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
-
-    # Build model with dynamic input_dim from data
-    input_dim = sequences.shape[-1]
-    prediction_target = adj_cfg.get('prediction_target', 'ratio')
-    adj_model = TVAdjustmentModel(
-        input_dim=input_dim,
-        gru_hidden_dim=adj_cfg.getint('gru_hidden_dim'),
-        gru_layers=adj_cfg.getint('gru_layers'),
-        attention_heads=adj_cfg.getint('attention_heads'),
-        dropout=adj_cfg.getfloat('dropout'),
-        prediction_target=prediction_target,
-    ).double().to(device)
-
-    optimizer = optim.Adam(adj_model.parameters(), lr=adj_cfg.getfloat('learning_rate'))
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=50, factor=0.5)
-
-    metrics = MetricsTracker()
-    early_stopping = EarlyStopping(patience=100)
-    adj_model_path = config['save_path']['adjustment_model_path']
-    best_val_loss = float('inf')
-
-    # Training loop
-    logger.info(f'Training adjustment model for up to {epochs} epochs...')
-    for epoch in range(epochs):
-        adj_model.train()
-        train_loss_sum = 0.0
-        n_train = 0
-
-        for seq_batch, target_batch, mask_batch, weight_batch in train_loader:
-            seq_batch = seq_batch.to(device)
-            target_batch = target_batch.to(device)
-            mask_batch = mask_batch.to(device)
-            weight_batch = weight_batch.to(device)
-
-            pred = adj_model(seq_batch, mask_batch)
-            loss = loss_fn(pred, target_batch, weight_batch)
-
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(adj_model.parameters(), 1.0)
-            optimizer.step()
-
-            train_loss_sum += loss.item() * len(seq_batch)
-            n_train += len(seq_batch)
-
-        train_loss = train_loss_sum / max(n_train, 1)
-
-        # Validation
-        adj_model.train(False)
-        val_loss_sum = 0.0
-        n_val = 0
-        with torch.no_grad():
-            for seq_batch, target_batch, mask_batch, weight_batch in val_loader:
-                seq_batch = seq_batch.to(device)
-                target_batch = target_batch.to(device)
-                mask_batch = mask_batch.to(device)
-
-                pred = adj_model(seq_batch, mask_batch)
-                loss = loss_fn(pred, target_batch)
-                val_loss_sum += loss.item() * len(seq_batch)
-                n_val += len(seq_batch)
-
-        val_loss = val_loss_sum / max(n_val, 1)
-        scheduler.step(val_loss)
-
-        is_best = metrics.update(epoch, train_loss, val_loss)
-        if is_best and val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save(adj_model.state_dict(), adj_model_path)
-
-        if (epoch + 1) % 50 == 0:
-            logger.info(f'Epoch {epoch+1}/{epochs} - Train: {train_loss:.6f} - Val: {val_loss:.6f}')
-
-        if early_stopping.step(val_loss):
-            logger.info(f'Early stopping at epoch {epoch+1}')
-            break
-
-    logger.info(f'Best validation loss: {best_val_loss:.6f}')
-
-    # Final assessment
-    logger.info('Running final assessment on val set...')
-    adj_model.load_state_dict(torch.load(adj_model_path, map_location=device, weights_only=True))
-    adj_model.train(False)
-
-    all_preds = []
-    all_targets = []
-    with torch.no_grad():
-        for seq_batch, target_batch, mask_batch, _ in val_loader:
-            seq_batch = seq_batch.to(device)
-            mask_batch = mask_batch.to(device)
-            pred = adj_model(seq_batch, mask_batch)
-            all_preds.append(pred.cpu().numpy())
-            all_targets.append(target_batch.numpy())
-
-    preds = np.concatenate(all_preds).flatten()
-    true = np.concatenate(all_targets).flatten()
-
-    rmse = compute_rmse(preds, true)
-    mape = compute_mape(preds, true)
-    logger.info(f'Adjustment model - RMSE: {rmse:.6f}, MAPE: {mape:.4f}')
-
-    # Save stage metrics
-    log_dir = config['save_path']['log_dir']
-    metrics.save(os.path.join(log_dir, 'pipeline_stage2_metrics.json'))
-
-    report = {
-        'epochs_run': len(metrics.train_losses),
-        'best_val_loss': best_val_loss,
-        'rmse': rmse,
-        'mape': mape,
-        'input_dim': input_dim,
-        'train_samples': int(train_mask.sum()),
-        'val_samples': int(val_mask.sum()),
-        'feature_stats': feat_stats,
-        'target_stats': target_stats,
-    }
-    return report
 
 
 # ---------------------------------------------------------------------------
 # Main Pipeline
 # ---------------------------------------------------------------------------
 def main():
-    parser = ArgumentParser(description='SSVI+NN -> Adjustment Model pipeline')
+    parser = ArgumentParser(description='Model 1 (SSVI+NN) training pipeline')
     parser.add_argument('--on_gpu', action='store_true')
-    parser.add_argument('--stage1_epochs', type=int, default=3)
-    parser.add_argument('--stage2_epochs', type=int, default=None,
-                        help='Override adjustment model epochs (default: from config)')
-    parser.add_argument('--skip_stage1', action='store_true',
-                        help='Skip Stage 1, load existing checkpoint for Stage 2')
+    parser.add_argument('--epochs', type=int, default=3)
+    parser.add_argument('--skip_train', action='store_true',
+                        help='Skip Training, run diagnostics only')
     args = parser.parse_args()
 
+    os.chdir(os.path.join(os.path.dirname(__file__), '..', 'src'))
     config = load_config('config.ini')
     seed = config['training'].getint('seed')
     set_seed(seed)
@@ -544,9 +353,8 @@ def main():
     logger.info('=' * 60)
     logger.info('PIPELINE START')
     logger.info(f'  Device: {device}')
-    logger.info(f'  Stage 1 epochs: {args.stage1_epochs}')
-    logger.info(f'  Stage 2 epochs: {args.stage2_epochs or "config default"}')
-    logger.info(f'  Skip Stage 1: {args.skip_stage1}')
+    logger.info(f'  Epochs: {args.epochs}')
+    logger.info(f'  Skip Train: {args.skip_train}')
     logger.info('=' * 60)
 
     # Shared data processor (loaded once)
@@ -558,27 +366,28 @@ def main():
     pipeline_report = {}
 
     # --- Stage 1 ---
-    if not args.skip_stage1:
+    if not args.skip_train:
         model, val_loader, stage1_report = train_stage1(
-            config, device, logger, epochs=args.stage1_epochs, dp=dp)
+            config, device, logger, epochs=args.epochs, dp=dp)
         pipeline_report['stage1'] = stage1_report
 
         # Transition gate: abort if predictions are invalid
         if not stage1_report['prediction_stats']['valid']:
-            logger.error('PIPELINE ABORTED: Stage 1 predictions contain NaN/Inf')
+            logger.error('PIPELINE ABORTED: Predictions contain NaN/Inf')
             pipeline_report['aborted'] = True
             _save_json(pipeline_report, os.path.join(log_dir, 'pipeline_report.json'))
             return
     else:
         # Load existing checkpoint
-        logger.info('Skipping Stage 1, loading existing checkpoint...')
+        logger.info('Skipping Training, loading existing checkpoint...')
         hidden_sizes = [int(x) for x in parse_list_config(config['model_sett']['hidden_sizes'], int)]
         ensemble_num = config['model_sett'].getint('ensemble_num')
-        model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num).to(device)
+        epsilon = config['model_sett'].getfloat('epsilon', fallback=0.01)
+        model = MultiModel(hidden_sizes=hidden_sizes, ensemble_num=ensemble_num, epsilon=epsilon).to(device)
 
         model_path = config['save_path']['model_path']
         if not os.path.exists(model_path):
-            logger.error(f'No checkpoint found at {model_path}. Run Stage 1 first.')
+            logger.error(f'No checkpoint found at {model_path}. Run training first.')
             return
         model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
         model.train(False)
@@ -594,11 +403,6 @@ def main():
             'surface_check': surface_check,
         }
 
-    # --- Stage 2 ---
-    stage2_report = train_stage2(
-        config, device, logger, model, dp, epochs=args.stage2_epochs)
-    pipeline_report['stage2'] = stage2_report
-
     # --- Pipeline Report ---
     _save_json(pipeline_report, os.path.join(log_dir, 'pipeline_report.json'))
 
@@ -606,11 +410,8 @@ def main():
     logger.info('PIPELINE COMPLETE')
     if 'stage1' in pipeline_report and not pipeline_report['stage1'].get('skipped'):
         s1 = pipeline_report['stage1']
-        logger.info(f'  Stage 1: best_val={s1["best_val_loss"]:.6f}, '
+        logger.info(f'  Model 1: best_val={s1["best_val_loss"]:.6f}, '
                     f'SSVI healthy={s1["ssvi_healthy"]}')
-    if 'stage2' in pipeline_report and 'rmse' in pipeline_report['stage2']:
-        s2 = pipeline_report['stage2']
-        logger.info(f'  Stage 2: RMSE={s2["rmse"]:.6f}, MAPE={s2["mape"]:.4f}')
     logger.info(f'  Report saved to {os.path.join(log_dir, "pipeline_report.json")}')
     logger.info('=' * 60)
 

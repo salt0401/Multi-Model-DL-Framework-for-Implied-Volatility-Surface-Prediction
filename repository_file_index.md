@@ -11,7 +11,9 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 | `ARCHITECTURE.md` | Core documentation describing the 5-Model architecture pipeline. | Keep |
 | `EXPERIMENT.md` | Log of experiments, design choices, and training runs. | Keep |
 | `README.md` | The main project landing page, outlining requirements and model status. | Keep |
+| `repository_file_index.md` | Exhaustive record mapping every file in the repo to its function. | Keep |
 | `requirements.txt` | Python dependency locking file (pip install -r). | Keep |
+| `verification_report.md` | Exhaustive migration and audit checklist proof for Model 1 tracking. | Keep |
 
 ---
 
@@ -19,39 +21,56 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `build_features.py` | Generates enhancement features (e.g. S&P500 returns, realized volatility) to append to the dataset. | Keep |
-| `compare_architectures.py` | A/B testing script for Additive vs Multiplicative base architectures. | Keep |
-| `diagnose_rho_gradient.py` | SSVI troubleshooting script to analyze vanishing gradients on correlation parameters. | Keep |
 | `download_data.py` | Pipeline for fetching raw option data from FinMind and Yahoo Finance. | Keep |
-| `generate_model1_plots.py` | Generates visualization plots for Model 1 predictions. | Keep |
-| `inspect_ssvi_params.py` | Tool to extract and inspect the learned SSVI parameters (rho, eta, gamma). | Keep |
-| `plot_smooth_iv_check.py` | Script to verify that fixing yATM yields a smooth IV surface. | Keep |
 | `plot_training_curves.py` | Simple tool to plot standard training/validation loss curves. | Keep |
-| `train_diagnose.py` | Specialized training loop that tracks parameters per-epoch for debugging. | Keep |
 
 ---
 
-## 3. `src/` Directory (Model 1 & Base Pipeline, HyperIV, DDPM)
+## 3. `model1_research/` Directory (Model 1 & Base Pipeline)
+| File | Description | Action/Status |
+|------|-------------|---------------|
+| `model.py` | **Model 1**: eSSVI + NN architectures (SSVIModel, SmileModel, SingleModel, MultiModel) and loss functions. | Keep |
+| `train.py` | Training script specifically for Model 1's initial prior phase. | Keep |
+| `train_pipeline.py` | **Model 1**: Master training loop for eSSVI + Neural Network with diagnostics. | Keep |
+| `experiment.py` | **Core**: Main inference and evaluation script for Model 1 (creates fits, generates experiment_results.csv). | Keep |
+| `model1_background.md` | Architecture background, design rationale, parameter tables, and V2 results (ε=0.02). | Keep |
+| `__init__.py` | Package init. | Keep |
+
+### `model1_research/scripts/`
+| File | Description | Action/Status |
+|------|-------------|---------------|
+| `generate_model1_plots.py` | Generates 4 IV curve fit plots (train/val/test) and loss curve. | Keep |
+| `plot_pipeline_metrics.py` | Plots loss from pipeline metrics JSON. | Keep |
+| `plot_smooth_iv_check.py` | Fixed-yATM smooth surface verification. | Keep |
+| `train_diagnose.py` | Specialized training loop with per-epoch parameter tracking. | Keep |
+
+### `model1_research/tests/`
+| File | Description | Action/Status |
+|------|-------------|---------------|
+| `conftest.py` | Model 1 test fixtures (tiny_batch). | Keep |
+| `test_model.py` | Unit tests for eSSVI params, shapes, gradients. | Keep |
+| `test_model_regression.py` | Regression guards for 17 fixed bugs. | Keep |
+
+---
+
+## 4. `src/` Directory (Shared Core, HyperIV, DDPM)
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `config.ini` | Core hyperparameters, paths, and training configuration. | Keep |
 | `data/module_d_features.csv` | Output file for the extracted Greek features (Vanna, Volga, etc). | Keep |
 | `dataset.py` | **Core**: The unified `DataProcessor` for splitting, filtering, and tensor generation. | Keep |
 | `diffusion.py` | **Model 5**: DDPM (1D U-Net) architecture for IV surface forecasting. | Keep |
-| `experiment.py` | **Core**: Main inference and evaluation script for Model 1 (creates fits). | Keep |
 | `hyperiv.py` | **Model 4**: Hypernetwork model architecture for generating TargetMLP weights. | Keep |
-| `model.py` | **Model 1**: SSVI + NN architectures and loss functions. | Keep |
 | `structural_break.py` | Change-point detection logic (PELT) for volatility regimes. | Keep |
 | `test.py` | Script for performing extended Model 1 evaluations (arbitrage checks). | Keep |
-| `train.py` | Training script specifically for Model 1's initial prior phase. | Keep |
 | `train_diffusion.py` | **Model 5**: Training script for DDPM model. | Keep |
 | `train_hyperiv.py` | **Model 4**: Training script for HyperIV model. | Keep |
-| `train_pipeline.py` | **Model 1**: Master two-stage training loop for SSVI + Neural Network. | Keep |
 | `transfer.py` | Utilities for transfer learning (loading mismatched weights). | Keep |
 | `utils.py` | Helper functions (metrics, plotting, seed setting, early stopping). | Keep |
 
 ---
 
-## 4. `model2_research/` Directory (Model 2 Local Volatility)
+## 5. `model2_research/` Directory (Model 2 Local Volatility)
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `README.md` | Model 2 specific architecture documentation. | Keep |
@@ -74,7 +93,7 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 
 ---
 
-## 5. `model3_research/` Directory (Model 3 Residual Adjustment)
+## 6. `model3_research/` Directory (Model 3 Adjustments)
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `README.md` | Overview of the Model 3 architectures (TFT vs xLSTM vs GRU). | Keep |
@@ -108,7 +127,7 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 
 ---
 
-## 6. `tests/` Directory (Unit Testing)
+## 7. `tests/` Directory (Model 1, Model 3, Integration)
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `conftest.py` | Global pytest configuration (sets default dtype to float64, fixes seeds). | Keep |

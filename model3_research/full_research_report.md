@@ -7,12 +7,12 @@
 
 ## 1. Problem Specification
 
-- **Task**: Predict adjustment ratio alpha for base model (SSVI+NN) during structural breaks
-- **Input**: 20-day sliding window x 15 features per timestep
+- **Task**: Predict adjustment ratio alpha for base model (eSSVI+NN) during structural breaks
+- **Input**: 20-day sliding window x 16 features per timestep
 - **Features**: 
   - 6 base features: `vix_change`, `underlying_return`, `logm`, `tau`, `tv_pred`, `itm_otm`
   - 6 enhancement features: `sp500_return`, `iv_term_slope`, `iv_skew`, `vrp_20d`, `futures_basis_pct`, `rv_20d`
-  - 3 Model 2 Greeks (V3): `vanna_proxy`, `volga_proxy`, `lv_gradient_K`
+  - 4 Model 2 Greeks (Module D): `local_vol`, `vanna`, `volga`, `lv_gradient_K`
 - **Target**: tv_ratio = tv_true / tv_pred (multiplicative correction)
 - **Application**: tv_adjusted = tv_base * alpha
 - **Key challenge**: Crisis periods are rare but critical (2001/09, 2008/10, 2016/05)
@@ -209,4 +209,4 @@ pip install torchxlstm     # Pure PyTorch alternative
 - TFT: potential for best performance + interpretability
 - xLSTM: minimal risk, guaranteed improvement over GRU
 
-> **Update (2026-02-22)**: Both architectures successfully implemented and compared. While both outperformed the GRU baseline (xLSTM by 4.3%, TFT by 1.7%), they exhibited significant overfitting (train-val gap 2.8x – 6.9x). Parameter-level regularization experiments (AdamW, Cautious Weight Decay, Constrained Parameter Regularization) were conducted to establish a higher validation floor. Additionally, switching to `float32` training yielded a 3x speedup for TFT due to its compute-bound nature, whereas xLSTM showed no improvement as it is memory-bound.
+> **Update (2026-02-22)**: Both architectures successfully implemented and compared against the GRU baseline. All three models exhibited significant overfitting. Parameter-level regularization experiments (AdamW, Cautious Weight Decay, Constrained Parameter Regularization) were conducted. Additionally, switching to `float32` training yielded a 3x speedup for TFT due to its compute-bound nature, whereas xLSTM showed no improvement as it is memory-bound. Model 2 Greeks (4 features) have been integrated, expanding input_dim from 12 to 16. Fresh training with the updated pipeline is in progress.

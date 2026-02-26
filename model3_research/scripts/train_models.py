@@ -19,6 +19,9 @@ import os
 # Add src/ to import path for shared modules
 _src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'src')
 sys.path.insert(0, _src_dir)
+# Add project root for model1_research package
+_project_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
+sys.path.insert(0, _project_root)
 # Add model3_research/ to import path for adjustment models
 _m3_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, _m3_dir)
@@ -319,16 +322,39 @@ def main():
     logger.info(f'Data shape: sequences={sequences.shape}, targets={targets.shape}, '
                 f'input_dim={input_dim}')
 
-    # --- Step 3: Chronological split ---
-    unique_dates = np.sort(np.unique(seq_dates))
-    split_idx = int(len(unique_dates) * 0.8)
-    val_start_date = unique_dates[split_idx]
+    # --- Step 3: Chronological split (aligned with Model 1) ---
+    # Model 1 uses config dates: train 2014-01-01 to 2020-12-31, test 2021.
+    # We mirror this: filter to train period, 80/20 split within, then 2021 = test.
+    from utils import parse_date
+    train_end_dt = parse_date(config['training']['train_end_date'])
+    test_start_dt = parse_date(config['training']['test_start_date'])
+    test_end_dt = parse_date(config['training']['test_end_date'])
 
-    train_mask = seq_dates < val_start_date
-    val_mask = seq_dates >= val_start_date
+    # Convert config dates to numpy datetime64 for comparison with seq_dates
+    train_end_np = np.datetime64(train_end_dt)
+    test_start_np = np.datetime64(test_start_dt)
+    test_end_np = np.datetime64(test_end_dt)
 
-    logger.info(f'Chronological split: train < {val_start_date}, '
-                f'train={train_mask.sum()}, val={val_mask.sum()}')
+    # Split into train+val period vs test period
+    trainval_mask = seq_dates <= train_end_np
+    test_mask = (seq_dates >= test_start_np) & (seq_dates <= test_end_np)
+
+    logger.info(f'Config date split: train+val <= {train_end_dt:%Y-%m-%d}, '
+                f'test {test_start_dt:%Y-%m-%d} - {test_end_dt:%Y-%m-%d}')
+    logger.info(f'  train+val sequences: {trainval_mask.sum()}, test sequences: {test_mask.sum()}')
+
+    # Within train+val period, do 80/20 chronological split (same as Model 1)
+    trainval_dates = np.sort(np.unique(seq_dates[trainval_mask]))
+    split_idx = int(len(trainval_dates) * 0.8)
+    val_start_np = trainval_dates[split_idx]
+
+    train_mask = trainval_mask & (seq_dates < val_start_np)
+    val_mask = trainval_mask & (seq_dates >= val_start_np)
+
+    logger.info(f'Chronological 80/20 split within train period:')
+    logger.info(f'  Train: < {val_start_np} ({train_mask.sum()} sequences)')
+    logger.info(f'  Val:   >= {val_start_np} to {train_end_np} ({val_mask.sum()} sequences)')
+    logger.info(f'  Test:  {test_start_np} to {test_end_np} ({test_mask.sum()} sequences)')
 
     # --- Step 4: KDE weights (train-only) ---
     logger.info('Fitting KDE weights...')
@@ -353,6 +379,20 @@ def main():
     loader_kwargs = {'pin_memory': True, 'num_workers': 0} if use_gpu else {}
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
+
+    # Test loader (2021 held-out set, aligned with Model 1)
+    test_loader = None
+    if test_mask.sum() > 0:
+        test_kde_weights = loss_fn.eval_kde_weights(targets[test_mask].numpy())
+        test_ds = TensorDataset(
+            sequences[test_mask].to(train_dtype), targets[test_mask].to(train_dtype),
+            masks[test_mask].to(train_dtype),
+            torch.tensor(test_kde_weights, dtype=train_dtype),
+        )
+        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
+        logger.info(f'Test set: {test_mask.sum()} sequences loaded')
+    else:
+        logger.warning('No test sequences found for the configured test period.')
 
     # --- Step 6: Build model ---
     logger.info(f'Building {args.model} model...')
@@ -540,7 +580,29 @@ def main():
 
     rmse = compute_rmse(preds, true)
     mape = compute_mape(preds, true)
-    logger.info(f'{args.model.upper()} model - RMSE: {rmse:.6f}, MAPE: {mape:.4f}')
+    logger.info(f'{args.model.upper()} Val - RMSE: {rmse:.6f}, MAPE: {mape:.4f}')
+
+    # --- Step 8.5: Test set evaluation (2021 held-out) ---
+    test_rmse = None
+    test_mape = None
+    if test_loader is not None:
+        logger.info('Evaluating on test set (2021 held-out)...')
+        test_preds = []
+        test_targets = []
+        with torch.no_grad():
+            for seq_batch, target_batch, mask_batch, _ in test_loader:
+                seq_batch = seq_batch.to(device)
+                mask_batch = mask_batch.to(device)
+                pred = model(seq_batch, mask_batch)
+                test_preds.append(pred.cpu().numpy())
+                test_targets.append(target_batch.numpy())
+
+        test_preds_np = np.concatenate(test_preds).flatten()
+        test_true_np = np.concatenate(test_targets).flatten()
+
+        test_rmse = compute_rmse(test_preds_np, test_true_np)
+        test_mape = compute_mape(test_preds_np, test_true_np)
+        logger.info(f'{args.model.upper()} Test (2021) - RMSE: {test_rmse:.6f}, MAPE: {test_mape:.4f}')
 
     # --- Step 9: Save results ---
     results = {
@@ -557,6 +619,8 @@ def main():
         'best_epoch': metrics.best_epoch,
         'final_rmse': float(rmse),
         'final_mape': float(mape),
+        'test_rmse': float(test_rmse) if test_rmse is not None else None,
+        'test_mape': float(test_mape) if test_mape is not None else None,
         'training_minutes': round(total_time, 1),
         'device': str(device),
         'input_dim': input_dim,

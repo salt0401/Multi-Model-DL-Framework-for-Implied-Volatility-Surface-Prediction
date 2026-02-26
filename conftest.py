@@ -141,7 +141,7 @@ def mock_config():
     }
     cfg['save_path'] = {
         'plot_path': '../logs',
-        'model_path': '../models/MultiModel.pt',
+        'model_path': '../model1_research/models/MultiModel.pt',
         'dgm_model_path': '../models/DGMModel.pt',
         'dupire_model_path': '../models/DupireModel.pt',
         'adjustment_model_path': '../models/AdjustmentModel.pt',

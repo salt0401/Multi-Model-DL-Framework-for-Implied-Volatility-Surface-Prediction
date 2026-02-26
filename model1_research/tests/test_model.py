@@ -58,15 +58,15 @@ class TestBSModel:
 
 class TestSSVIModel:
     def test_output_shape(self, tiny_batch):
-        _, logm, yATM, _ = tiny_batch
+        tau, logm, yATM, _ = tiny_batch
         model = SSVIModel()
-        out, g_tau, g_logm, g_logm2 = model(logm, yATM)
+        out, g_tau, g_logm, g_logm2 = model(logm, tau, yATM)
         assert out.shape == (16, 1)
 
     def test_dtype(self, tiny_batch):
-        _, logm, yATM, _ = tiny_batch
+        tau, logm, yATM, _ = tiny_batch
         model = SSVIModel()
-        out, _, _, _ = model(logm, yATM)
+        out, _, _, _ = model(logm, tau, yATM)
         assert out.dtype == torch.float64
 
     def test_power_law_params(self):
@@ -81,20 +81,32 @@ class TestSSVIModel:
         assert 'raw_lambda' in param_names
         assert 'raw_eta' not in param_names
 
-    def test_rho_initial_sign_negative(self):
-        """rho should initialize negative for equity index left-skew (fear premium)."""
+    def test_essvi_params_exist(self):
+        """eSSVI: model must have raw_rho_0, raw_rho_inf, raw_decay."""
         model = SSVIModel()
-        rho = -torch.sigmoid(model.raw_rho)
-        assert rho.item() < 0, f"rho should be negative for equity index, got {rho.item():.4f}"
+        param_names = [n for n, _ in model.named_parameters()]
+        assert 'raw_rho_inf' in param_names
+        assert 'raw_decay' in param_names
+        # raw_rho_0 exists but is frozen (requires_grad=False), so it still shows in named_parameters
+        all_names = [n for n, _ in model.named_parameters()] + [n for n, _ in model.named_buffers()]
+        assert any('raw_rho_0' in n for n in [n2 for n2, p in model.named_parameters()])
+
+    def test_rho_initial_sign_negative(self):
+        """rho_0 and rho_inf should initialize negative for equity index left-skew."""
+        model = SSVIModel()
+        # eSSVI: rho_0 is clamped directly, rho_inf is clamped directly
+        assert model.raw_rho_0.item() < 0, f"rho_0 should be negative, got {model.raw_rho_0.item():.4f}"
+        assert model.raw_rho_inf.item() < 0, f"rho_inf should be negative, got {model.raw_rho_inf.item():.4f}"
 
     def test_left_skew_at_init(self):
         """At initialization, OTM put (logm<0) should have higher TV than OTM call (logm>0)."""
         model = SSVIModel()
         yATM = torch.tensor([[0.05]], dtype=torch.float64)
+        tau = torch.tensor([[0.5]], dtype=torch.float64)
         logm_put = torch.tensor([[-0.3]], dtype=torch.float64)   # OTM put
         logm_call = torch.tensor([[0.3]], dtype=torch.float64)   # OTM call
-        out_put, _, _, _ = model(logm_put, yATM)
-        out_call, _, _, _ = model(logm_call, yATM)
+        out_put, _, _, _ = model(logm_put, tau, yATM)
+        out_call, _, _, _ = model(logm_call, tau, yATM)
         assert out_put.item() > out_call.item(), (
             f"Left skew violated: OTM put TV ({out_put.item():.6f}) "
             f"should exceed OTM call TV ({out_call.item():.6f})"
@@ -103,31 +115,39 @@ class TestSSVIModel:
     def test_rho_bounded(self, tiny_batch):
         _, logm, yATM, _ = tiny_batch
         model = SSVIModel()
-        # rho = -sigmoid(raw_rho) so should be in (-1, 0)
-        rho = -torch.sigmoid(model.raw_rho)
-        assert -1 < rho.item() < 0, f"rho should be in (-1, 0), got {rho.item():.4f}"
+        # eSSVI: rho_0 and rho_inf should be in (-1, 0)
+        assert -1 < model.raw_rho_0.item() < 0, f"rho_0 should be in (-1, 0), got {model.raw_rho_0.item():.4f}"
+        assert -1 < model.raw_rho_inf.item() < 0, f"rho_inf should be in (-1, 0), got {model.raw_rho_inf.item():.4f}"
 
     def test_output_positive(self, tiny_batch):
-        _, logm, yATM, _ = tiny_batch
+        tau, logm, yATM, _ = tiny_batch
         # With positive yATM and small logm, SSVI output should be positive
         model = SSVIModel()
-        out, _, _, _ = model(logm, yATM)
+        out, _, _, _ = model(logm, tau, yATM)
         assert (out > 0).all()
 
     def test_grad_logm2_positive(self, tiny_batch):
-        _, logm, yATM, _ = tiny_batch
+        tau, logm, yATM, _ = tiny_batch
         model = SSVIModel()
-        _, _, _, grad_logm2 = model(logm, yATM)
+        _, _, _, grad_logm2 = model(logm, tau, yATM)
         # Second derivative of SSVI w.r.t. logm should be positive
         assert (grad_logm2 >= 0).all()
+
+    def test_rho_0_frozen_by_default(self):
+        """eSSVI: raw_rho_0 should be frozen (requires_grad=False) at init."""
+        model = SSVIModel()
+        assert not model.raw_rho_0.requires_grad, "raw_rho_0 should be frozen at init"
+        assert model.raw_rho_inf.requires_grad, "raw_rho_inf should be trainable"
+        assert model.raw_decay.requires_grad, "raw_decay should be trainable"
 
     def test_gradient_flow(self, tiny_batch):
         _, logm, yATM, _ = tiny_batch
         model = SSVIModel()
-        out, _, _, _ = model(logm, yATM)
+        tau = tiny_batch[0]
+        out, _, _, _ = model(logm, tau, yATM)
         loss = out.sum()
         loss.backward()
-        assert model.raw_rho.grad is not None
+        assert model.raw_rho_inf.grad is not None
 
 
 # ── SmileModel ────────────────────────────────────────────────────────

@@ -177,15 +177,19 @@ class TestRegressionT2:
 class TestRegressionE1:
     """E1: All models return 4-tuple (output, grad_tau, grad_logm, grad_logm2)."""
 
-    @pytest.mark.parametrize("ModelClass,extra_args", [
-        (BSModel, {}),
-        (SSVIModel, {}),
-    ])
-    def test_four_tuple_return(self, ModelClass, extra_args):
-        model = ModelClass(**extra_args)
+    def test_bs_four_tuple_return(self):
+        model = BSModel()
         logm = torch.randn(4, 1, dtype=torch.float64)
         yATM = torch.rand(4, 1, dtype=torch.float64) + 0.01
         result = model(logm, yATM)
+        assert isinstance(result, tuple) and len(result) == 4
+
+    def test_ssvi_four_tuple_return(self):
+        model = SSVIModel()
+        logm = torch.randn(4, 1, dtype=torch.float64)
+        tau = torch.rand(4, 1, dtype=torch.float64) * 1.98 + 0.02
+        yATM = torch.rand(4, 1, dtype=torch.float64) + 0.01
+        result = model(logm, tau, yATM)
         assert isinstance(result, tuple) and len(result) == 4
 
     def test_smile_four_tuple(self):
