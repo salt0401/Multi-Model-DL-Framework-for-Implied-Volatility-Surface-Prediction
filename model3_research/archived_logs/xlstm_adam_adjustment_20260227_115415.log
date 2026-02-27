@@ -1,0 +1,50 @@
+2026-02-27 11:54:15,837 - xlstm_adam_adjustment - INFO - === Training XLSTM (ADAM) Adjustment Model ===
+2026-02-27 11:54:15,839 - xlstm_adam_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
+2026-02-27 11:54:15,839 - xlstm_adam_adjustment - INFO - Dtype: float64
+2026-02-27 11:54:15,839 - xlstm_adam_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
+2026-02-27 11:54:15,948 - xlstm_adam_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../model1_research/models/MultiModel.pt
+2026-02-27 11:54:15,949 - xlstm_adam_adjustment - INFO - Loading Model 2 (ICNN Dupire) for Greek Extraction...
+2026-02-27 11:54:15,966 - xlstm_adam_adjustment - INFO - Model 2 loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../models/DupireModel.pt, GreekExtractor initialized.
+2026-02-27 11:54:15,966 - xlstm_adam_adjustment - INFO - Preparing adjustment data...
+2026-02-27 11:54:25,876 - xlstm_adam_adjustment - INFO - Data shape: sequences=torch.Size([245228, 20, 16]), targets=torch.Size([245228, 1]), input_dim=16
+2026-02-27 11:54:25,878 - xlstm_adam_adjustment - INFO - Config date split: train+val <= 2020-12-31, test 2021-01-01 - 2021-12-31
+2026-02-27 11:54:25,879 - xlstm_adam_adjustment - INFO -   train+val sequences: 201729, test sequences: 43499
+2026-02-27 11:54:25,887 - xlstm_adam_adjustment - INFO - Chronological 80/20 split within train period:
+2026-02-27 11:54:25,887 - xlstm_adam_adjustment - INFO -   Train: < 2019-08-13T00:00:00.000000000 (153249 sequences)
+2026-02-27 11:54:25,888 - xlstm_adam_adjustment - INFO -   Val:   >= 2019-08-13T00:00:00.000000000 to 2020-12-31T00:00:00.000000 (48480 sequences)
+2026-02-27 11:54:25,888 - xlstm_adam_adjustment - INFO -   Test:  2021-01-01T00:00:00.000000 to 2021-12-31T00:00:00.000000 (43499 sequences)
+2026-02-27 11:54:25,888 - xlstm_adam_adjustment - INFO - Fitting KDE weights...
+2026-02-27 11:56:10,085 - xlstm_adam_adjustment - INFO - Test set: 43499 sequences loaded
+2026-02-27 11:56:10,085 - xlstm_adam_adjustment - INFO - Building xlstm model...
+2026-02-27 11:56:10,088 - xlstm_adam_adjustment - INFO - Model parameters: 40,165 total, 40,165 trainable
+2026-02-27 11:56:11,183 - xlstm_adam_adjustment - INFO - Optimizer: adam (wd=N/A)
+2026-02-27 11:56:11,183 - xlstm_adam_adjustment - INFO - Training: epochs=1000, lr=0.001, batch_size=256
+2026-02-27 11:56:11,183 - xlstm_adam_adjustment - INFO - Save path: C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\models\xlstm_AdjustmentModel.pt
+2026-02-27 12:07:47,903 - xlstm_adam_adjustment - INFO - Epoch 10/1000 - Train: 0.103156 - Val: 0.236619 - Best: 0.195227 - LR: 1.00e-03 - Time: 11.6min
+2026-02-27 12:19:24,581 - xlstm_adam_adjustment - INFO - Epoch 20/1000 - Train: 0.091470 - Val: 0.233197 - Best: 0.194026 - LR: 1.00e-03 - Time: 23.2min
+2026-02-27 12:31:02,680 - xlstm_adam_adjustment - INFO - Epoch 30/1000 - Train: 0.080785 - Val: 0.200876 - Best: 0.194026 - LR: 1.00e-03 - Time: 34.9min
+2026-02-27 12:42:44,138 - xlstm_adam_adjustment - INFO - Epoch 40/1000 - Train: 0.073171 - Val: 0.199183 - Best: 0.189701 - LR: 1.00e-03 - Time: 46.5min
+2026-02-27 12:54:22,652 - xlstm_adam_adjustment - INFO - Epoch 50/1000 - Train: 0.069987 - Val: 0.183063 - Best: 0.183063 - LR: 1.00e-03 - Time: 58.2min
+2026-02-27 13:06:07,856 - xlstm_adam_adjustment - INFO - Epoch 60/1000 - Train: 0.067139 - Val: 0.192965 - Best: 0.183063 - LR: 1.00e-03 - Time: 69.9min
+2026-02-27 13:17:43,773 - xlstm_adam_adjustment - INFO - Epoch 70/1000 - Train: 0.065315 - Val: 0.190822 - Best: 0.180910 - LR: 1.00e-03 - Time: 81.5min
+2026-02-27 13:29:21,499 - xlstm_adam_adjustment - INFO - Epoch 80/1000 - Train: 0.064153 - Val: 0.194924 - Best: 0.180542 - LR: 1.00e-03 - Time: 93.2min
+2026-02-27 13:41:00,459 - xlstm_adam_adjustment - INFO - Epoch 90/1000 - Train: 0.061725 - Val: 0.186635 - Best: 0.176908 - LR: 1.00e-03 - Time: 104.8min
+2026-02-27 13:52:42,133 - xlstm_adam_adjustment - INFO - Epoch 100/1000 - Train: 0.061195 - Val: 0.200118 - Best: 0.176908 - LR: 1.00e-03 - Time: 116.5min
+2026-02-27 14:04:16,650 - xlstm_adam_adjustment - INFO - Epoch 110/1000 - Train: 0.059819 - Val: 0.195408 - Best: 0.176135 - LR: 1.00e-03 - Time: 128.1min
+2026-02-27 14:15:51,004 - xlstm_adam_adjustment - INFO - Epoch 120/1000 - Train: 0.059467 - Val: 0.192000 - Best: 0.176135 - LR: 1.00e-03 - Time: 139.7min
+2026-02-27 14:27:31,838 - xlstm_adam_adjustment - INFO - Epoch 130/1000 - Train: 0.057890 - Val: 0.197725 - Best: 0.176135 - LR: 1.00e-03 - Time: 151.3min
+2026-02-27 14:38:58,082 - xlstm_adam_adjustment - INFO - Epoch 140/1000 - Train: 0.057683 - Val: 0.189413 - Best: 0.176135 - LR: 1.00e-03 - Time: 162.8min
+2026-02-27 14:49:55,544 - xlstm_adam_adjustment - INFO - Epoch 150/1000 - Train: 0.055821 - Val: 0.190900 - Best: 0.176135 - LR: 1.00e-03 - Time: 173.7min
+2026-02-27 15:00:46,338 - xlstm_adam_adjustment - INFO - Epoch 160/1000 - Train: 0.053327 - Val: 0.188143 - Best: 0.176135 - LR: 5.00e-04 - Time: 184.6min
+2026-02-27 15:11:39,229 - xlstm_adam_adjustment - INFO - Epoch 170/1000 - Train: 0.052739 - Val: 0.187796 - Best: 0.176135 - LR: 5.00e-04 - Time: 195.5min
+2026-02-27 15:22:29,459 - xlstm_adam_adjustment - INFO - Epoch 180/1000 - Train: 0.052659 - Val: 0.187027 - Best: 0.176135 - LR: 5.00e-04 - Time: 206.3min
+2026-02-27 15:33:18,404 - xlstm_adam_adjustment - INFO - Epoch 190/1000 - Train: 0.051575 - Val: 0.196387 - Best: 0.176135 - LR: 5.00e-04 - Time: 217.1min
+2026-02-27 15:44:08,906 - xlstm_adam_adjustment - INFO - Epoch 200/1000 - Train: 0.051530 - Val: 0.181825 - Best: 0.176135 - LR: 5.00e-04 - Time: 228.0min
+2026-02-27 15:47:24,178 - xlstm_adam_adjustment - INFO - Early stopping at epoch 203
+2026-02-27 15:47:24,179 - xlstm_adam_adjustment - INFO - Training complete: 231.2 minutes, best val loss: 0.176135
+2026-02-27 15:47:24,179 - xlstm_adam_adjustment - INFO - Final evaluation on validation set...
+2026-02-27 15:47:29,470 - xlstm_adam_adjustment - INFO - XLSTM Val - RMSE: 0.168285, MAPE: 0.1015
+2026-02-27 15:47:29,471 - xlstm_adam_adjustment - INFO - Evaluating on test set (2021 held-out)...
+2026-02-27 15:47:34,262 - xlstm_adam_adjustment - INFO - XLSTM Test (2021) - RMSE: 0.166022, MAPE: 0.1015
+2026-02-27 15:47:34,264 - xlstm_adam_adjustment - INFO - Results saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\logs\xlstm_results.json
+2026-02-27 15:47:34,265 - xlstm_adam_adjustment - INFO - Done.

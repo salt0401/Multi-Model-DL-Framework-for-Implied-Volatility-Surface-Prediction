@@ -1,0 +1,46 @@
+2026-02-27 08:29:16,164 - xlstm_cwd_adjustment - INFO - === Training XLSTM (CWD) Adjustment Model ===
+2026-02-27 08:29:16,168 - xlstm_cwd_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
+2026-02-27 08:29:16,168 - xlstm_cwd_adjustment - INFO - Dtype: float64
+2026-02-27 08:29:16,168 - xlstm_cwd_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
+2026-02-27 08:29:16,256 - xlstm_cwd_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../model1_research/models/MultiModel.pt
+2026-02-27 08:29:16,260 - xlstm_cwd_adjustment - INFO - Loading Model 2 (ICNN Dupire) for Greek Extraction...
+2026-02-27 08:29:16,274 - xlstm_cwd_adjustment - INFO - Model 2 loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../models/DupireModel.pt, GreekExtractor initialized.
+2026-02-27 08:29:16,274 - xlstm_cwd_adjustment - INFO - Preparing adjustment data...
+2026-02-27 08:29:26,104 - xlstm_cwd_adjustment - INFO - Data shape: sequences=torch.Size([245228, 20, 16]), targets=torch.Size([245228, 1]), input_dim=16
+2026-02-27 08:29:26,106 - xlstm_cwd_adjustment - INFO - Config date split: train+val <= 2020-12-31, test 2021-01-01 - 2021-12-31
+2026-02-27 08:29:26,106 - xlstm_cwd_adjustment - INFO -   train+val sequences: 201729, test sequences: 43499
+2026-02-27 08:29:26,113 - xlstm_cwd_adjustment - INFO - Chronological 80/20 split within train period:
+2026-02-27 08:29:26,113 - xlstm_cwd_adjustment - INFO -   Train: < 2019-08-13T00:00:00.000000000 (153249 sequences)
+2026-02-27 08:29:26,113 - xlstm_cwd_adjustment - INFO -   Val:   >= 2019-08-13T00:00:00.000000000 to 2020-12-31T00:00:00.000000 (48480 sequences)
+2026-02-27 08:29:26,114 - xlstm_cwd_adjustment - INFO -   Test:  2021-01-01T00:00:00.000000 to 2021-12-31T00:00:00.000000 (43499 sequences)
+2026-02-27 08:29:26,114 - xlstm_cwd_adjustment - INFO - Fitting KDE weights...
+2026-02-27 08:31:08,340 - xlstm_cwd_adjustment - INFO - Test set: 43499 sequences loaded
+2026-02-27 08:31:08,340 - xlstm_cwd_adjustment - INFO - Building xlstm model...
+2026-02-27 08:31:08,345 - xlstm_cwd_adjustment - INFO - Model parameters: 40,165 total, 40,165 trainable
+2026-02-27 08:31:09,178 - xlstm_cwd_adjustment - INFO - Optimizer: cwd (wd=0.01)
+2026-02-27 08:31:09,178 - xlstm_cwd_adjustment - INFO - Training: epochs=1000, lr=0.001, batch_size=256
+2026-02-27 08:31:09,178 - xlstm_cwd_adjustment - INFO - Save path: C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\models\xlstm_cwd_AdjustmentModel.pt
+2026-02-27 08:43:13,956 - xlstm_cwd_adjustment - INFO - Epoch 10/1000 - Train: 0.104865 - Val: 0.201403 - Best: 0.192092 - LR: 1.00e-03 - Time: 12.1min
+2026-02-27 08:55:18,994 - xlstm_cwd_adjustment - INFO - Epoch 20/1000 - Train: 0.094025 - Val: 0.209871 - Best: 0.192092 - LR: 1.00e-03 - Time: 24.2min
+2026-02-27 09:07:22,876 - xlstm_cwd_adjustment - INFO - Epoch 30/1000 - Train: 0.085022 - Val: 0.212564 - Best: 0.192092 - LR: 1.00e-03 - Time: 36.2min
+2026-02-27 09:19:21,653 - xlstm_cwd_adjustment - INFO - Epoch 40/1000 - Train: 0.076963 - Val: 0.192751 - Best: 0.186471 - LR: 1.00e-03 - Time: 48.2min
+2026-02-27 09:31:21,138 - xlstm_cwd_adjustment - INFO - Epoch 50/1000 - Train: 0.073110 - Val: 0.168758 - Best: 0.168758 - LR: 1.00e-03 - Time: 60.2min
+2026-02-27 09:43:25,422 - xlstm_cwd_adjustment - INFO - Epoch 60/1000 - Train: 0.069772 - Val: 0.180937 - Best: 0.168758 - LR: 1.00e-03 - Time: 72.3min
+2026-02-27 09:55:28,448 - xlstm_cwd_adjustment - INFO - Epoch 70/1000 - Train: 0.067674 - Val: 0.176524 - Best: 0.165634 - LR: 1.00e-03 - Time: 84.3min
+2026-02-27 10:07:44,754 - xlstm_cwd_adjustment - INFO - Epoch 80/1000 - Train: 0.066143 - Val: 0.187929 - Best: 0.165634 - LR: 1.00e-03 - Time: 96.6min
+2026-02-27 10:19:41,447 - xlstm_cwd_adjustment - INFO - Epoch 90/1000 - Train: 0.063817 - Val: 0.182669 - Best: 0.165634 - LR: 1.00e-03 - Time: 108.5min
+2026-02-27 10:31:41,680 - xlstm_cwd_adjustment - INFO - Epoch 100/1000 - Train: 0.063420 - Val: 0.180920 - Best: 0.165634 - LR: 1.00e-03 - Time: 120.5min
+2026-02-27 10:43:44,717 - xlstm_cwd_adjustment - INFO - Epoch 110/1000 - Train: 0.061723 - Val: 0.187004 - Best: 0.165634 - LR: 1.00e-03 - Time: 132.6min
+2026-02-27 10:55:53,414 - xlstm_cwd_adjustment - INFO - Epoch 120/1000 - Train: 0.058233 - Val: 0.181807 - Best: 0.165634 - LR: 5.00e-04 - Time: 144.7min
+2026-02-27 11:07:58,523 - xlstm_cwd_adjustment - INFO - Epoch 130/1000 - Train: 0.056577 - Val: 0.188402 - Best: 0.165634 - LR: 5.00e-04 - Time: 156.8min
+2026-02-27 11:19:59,886 - xlstm_cwd_adjustment - INFO - Epoch 140/1000 - Train: 0.056617 - Val: 0.182594 - Best: 0.165634 - LR: 5.00e-04 - Time: 168.8min
+2026-02-27 11:32:00,434 - xlstm_cwd_adjustment - INFO - Epoch 150/1000 - Train: 0.055187 - Val: 0.177349 - Best: 0.165634 - LR: 5.00e-04 - Time: 180.9min
+2026-02-27 11:44:03,620 - xlstm_cwd_adjustment - INFO - Epoch 160/1000 - Train: 0.055764 - Val: 0.182505 - Best: 0.165634 - LR: 5.00e-04 - Time: 192.9min
+2026-02-27 11:53:40,864 - xlstm_cwd_adjustment - INFO - Early stopping at epoch 168
+2026-02-27 11:53:40,865 - xlstm_cwd_adjustment - INFO - Training complete: 202.5 minutes, best val loss: 0.165634
+2026-02-27 11:53:40,865 - xlstm_cwd_adjustment - INFO - Final evaluation on validation set...
+2026-02-27 11:53:46,505 - xlstm_cwd_adjustment - INFO - XLSTM Val - RMSE: 0.161277, MAPE: 0.0969
+2026-02-27 11:53:46,506 - xlstm_cwd_adjustment - INFO - Evaluating on test set (2021 held-out)...
+2026-02-27 11:53:51,570 - xlstm_cwd_adjustment - INFO - XLSTM Test (2021) - RMSE: 0.164509, MAPE: 0.1020
+2026-02-27 11:53:51,573 - xlstm_cwd_adjustment - INFO - Results saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\logs\xlstm_cwd_results.json
+2026-02-27 11:53:51,575 - xlstm_cwd_adjustment - INFO - Done.

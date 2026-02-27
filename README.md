@@ -65,20 +65,21 @@ The loss function dynamically weights standard regression errors against explici
 
 **Why it matters:** Normal market conditions are relatively smooth, but crises cause "structural breaks" — sudden regime changes where historical patterns no longer apply. Without correction, the base model's predictions become unreliable during these periods.
 
-**How it works:** The model looks at the past 20 days of trading data (12 features per day, including base model predictions, VIX changes, S&P 500 returns, IV term structure slope, and realized volatility). A sequence encoder processes this time series, building up a representation of the current market regime. Then **multi-head attention** examines all 20 days and learns which past days are most relevant. The output is a multiplicative adjustment ratio: `adjusted_prediction = base_prediction * ratio`. Training uses KDE-weighted loss to focus on rare extreme events.
+**How it works:** The model looks at the past 20 days of trading data (16 features per day, including base model predictions, VIX changes, S&P 500 returns, IV term structure slope, realized volatility, and 4 Model 2 Greeks). A sequence encoder processes this time series, building up a representation of the current market regime. Then **multi-head attention** examines all 20 days and learns which past days are most relevant. The output is a multiplicative adjustment ratio: `adjusted_prediction = base_prediction * ratio`. Training uses KDE-weighted loss to focus on rare extreme events.
 
-**Architecture comparison (2026-02-21):** Three architectures were trained and compared on identical data (245K sequences, chronological split, GPU float64):
+**Architecture comparison (2026-02-27):** All 12 combinations (3 architectures × 4 optimizers) were trained and compared on identical 16-dim data (including Model 2 Greeks, 245K sequences, test set strictly 2021 held-out):
 
-| Metric | GRU (Baseline) | xLSTM (mLSTM) | TFT (Baseline) | TFT (CPR Regularized) |
-|--------|:---:|:---:|:---:|:---:|
-| **Val RMSE** | 0.1477 | 0.1414 | 0.1452 | **0.1404** |
-| **Val MAPE** | 9.43% | 9.01% | 9.12% | **8.89%** |
-| Parameters | 58,689 | **39,133** | 265,281 | 265,281 |
-| Training Time | **41.4 min** | 311.5 min | 207.1 min | 175.3 min (fp32) |
+| Rank | Architecture | Optimizer | Test RMSE | Test MAPE | Params |
+|:----:|-------------|-----------|:---------:|:---------:|:------:|
+| 1 | **TFT** | **CPR** ⭐ | **0.1558** | **9.51%** | 318K |
+| 2 | TFT | AdamW | 0.1590 | 9.75% | 318K |
+| 3 | TFT | Adam | 0.1592 | 9.85% | 318K |
+| 4 | TFT | CWD | 0.1608 | 9.75% | 318K |
+| 5 | GRU | AdamW | 0.1628 | 9.70% | 59K |
 
-**Winner: TFT with CPR** — Achieved the lowest RMSE (0.1404) and MAPE (8.89%), beating the unregularized xLSTM. While xLSTM is parameter-efficient, TFT provides excellent interpretability via its Variable Selection Network. Regularization (Constrained Parameter Regularization, CPR) was the key to unlocking TFT's performance by mitigating overfitting.
+**Winner: TFT with CPR** — Achieved the lowest Test RMSE (0.1558) and Test MAPE (9.51%) across all 12 combinations. TFT dominates the top 4 positions regardless of optimizer, proving that architecture matters more than regularization. CPR is highly effective for TFT but counterproductive for GRU (#12). See `model3_research/README.md` for the full 12-way table.
 
-**Results (2026-02-22):** Architecture comparison and regularization research are complete. TFT + CPR selected as best candidate. Model 2 (ICNN Dupire) implementation complete (V1-V3).
+**Results (2026-02-27):** Model 3 complete — full 12-way comparison done. TFT + CPR confirmed as the final Model 3. Model 2 (ICNN Dupire) implementation complete (V1-V3).
 
 ### 4. HyperIV: Hypernetwork (State-of-the-Art)
 
@@ -116,7 +117,7 @@ The architecture is a **1D U-Net** (encoder-decoder with skip connections). Cond
 
 ## Results Summary
 
-> **Status (2026-02-22):** Model 1 (eSSVI+NN) is trained on `prs_dataset_no_fat(clean)` (2014-2020 train, 2021 test). Model 2 (ICNN Dupire) has completed implementation and validation for its V1-V3 phases. Model 3 (Adjustment) architecture comparison is complete — TFT+CPR selected. Models 4, 5 await retraining.
+> **Status (2026-02-27):** Model 1 (eSSVI+NN) is trained on `prs_dataset_no_fat(clean)` (2014-2020 train, 2021 test). Model 2 (ICNN Dupire) V1-V3 complete. Model 3 fully finished — 12-way comparison (3 arch × 4 opt) done, TFT+CPR confirmed winner. Models 4, 5 await retraining.
 
 ### Model 1 (Base eSSVI+NN) — Current
 
@@ -145,15 +146,17 @@ Each plot shows the observed options (blue dots) and the model's predicted IV cu
 **Test Set Fit (2021 out-of-sample):**
 ![Model 1 Test Fit](model1_research/figures/m1_test_fit.png)
 
-### Model 3 (Adjustment) — Architecture Comparison Complete
+### Model 3 (Adjustment) — 12-Way Comparison Complete
 
-| Architecture | Val RMSE | Val MAPE | Params | Status |
-|-------------|:---:|:---:|:---:|--------|
-| TFT + CPR | **0.1404** | **8.89%** | 265K | **Primary Choice** — Best overall performance & interpretability |
-| TFT + AdamW | 0.1436 | 8.99% | 265K | Alternate Choice — Strong runner-up |
-| GRU + CWD (baseline) | 0.1447 | 9.13% | 59K | Baseline Choice — Fastest inference, reference model |
+**Top 3 of 12 combinations** (full table: `model3_research/README.md`):
 
-> **Note:** As of 2026-02-22, the 3 models above have been officially shortlisted and retained in `model3_research/models/`. All other preliminary experiments (including xLSTM and unregularized versions) have been moved to `archived_models/` to maintain a clean project structure.
+| Rank | Architecture | Optimizer | Test RMSE | Test MAPE | Params | Status |
+|:----:|-------------|-----------|:---------:|:---------:|:------:|--------|
+| 1 | TFT | CPR | **0.1558** | **9.51%** | 318K | **Primary Choice** |
+| 2 | TFT | AdamW | 0.1590 | 9.75% | 318K | Alternate |
+| 3 | TFT | Adam | 0.1592 | 9.85% | 318K | Baseline |
+
+> **Note:** As of 2026-02-27, all 12 combinations (3 arch × 4 opt) have been evaluated. TFT+CPR is confirmed as the winner. The 3 winning models remain in `model3_research/scripts/models/`; all other 9 are archived in `model3_research/archived_models/`.
 
 #### Regularization Loss Curves
 
@@ -197,7 +200,7 @@ Instead of strictly learning the Gatheral-Jacquier no-arbitrage bounds and stall
 
 | Member | rho_0 | eta | rho_inf | Constraint Type|
 |--------|-----|-----|-------|----------|
-| 0-4 | -0.950 | 0.733 | -0.50 | Hard-Frozen Base | 
+| 0-4 | -0.950 | 0.733 | -0.50 | Hard-Frozen Base |
 
 The extreme negative `rho_0` value heavily encodes the observed **left skew** in short-term TXO options (OTM puts are wildly more expensive than equidistant OTM calls). The Gatheral-Jacquier Arbitrage Limit Check ($\eta(1+|\rho_0|)$) currently sits at a healthy `0.9040`, safely beneath the classical bound of $\le 2.0$.
 
@@ -237,27 +240,26 @@ The extreme negative `rho_0` value heavily encodes the observed **left skew** in
 An A/B test compared two formulations:
 
 - **Additive** `w = eSSVI(tau, logm) + \tilde{y}_{ATM} * NN(tau, logm)`: Stable training, explicitly protected gradient signals via scaling epsilon.
-- **Multiplicative** `w = eSSVI(tau, logm) * NN(tau, logm)`: **Explodes at epoch 2** 
+- **Multiplicative** `w = eSSVI(tau, logm) * NN(tau, logm)`: **Explodes at epoch 2**
 
 Root cause: the product rule creates cross-terms in butterfly constraint derivatives that amplify gradient noise. The additive formulation isolates the eSSVI and NN gradients, preventing this feedback loop.
 
 ### Training Curves & Visualizations
 
-Training curve and IV surface visualizations can be regenerated from the training logs using `scripts/plot_training_curves.py`. The training logs are stored in `logs/` and results are documented in `EXPERIMENT.md`.
+Training curve and IV surface visualizations can be regenerated from the training logs using `scripts/plot_training_curves.py`. The training logs are stored in `logs/` and results are documented in `ARCHITECTURE.md`.
 
 ## Key Findings (from Model 1 eSSVI training)
 
 1. **The original base model was suppressed by static SSVI limits.** The optimizer was failing to trace the 45-degree angle of Deep-OTM Puts because classical static `rho` couldn't handle short-term maturities and was dominated by ATM data. Upgrading to the time-decaying `eSSVI` parameterization unlocked the true mathematical bounds.
 2. **Forcing Prior Form via Parameter Freezing is essential.** Setting `rho_0 = -0.95` with `requires_grad=False` allowed the network to ignore the dense cluster of ATM local-minima errors and instead perfectly build upon a steep base structure.
-3. **Additive scaling must be protected in low-volatility regimes** by modifying $yATM$ to $\tilde{y}_{ATM} = \sqrt{yATM^2 + \epsilon^2}$. 
+3. **Additive scaling must be protected in low-volatility regimes** by modifying $yATM$ to $\tilde{y}_{ATM} = \sqrt{yATM^2 + \epsilon^2}$.
 4. **Butterfly violations remain a separate tier challenge.** With the data accuracy solved (5.4% MAPE), the focus on local volatility dictates we move entirely to Model 2 (ICNN Dupire) for hard convexity extraction rather than fighting soft-penalty networks.
 
 ## Project Structure
 
 ```
 README.md               # This file (plain-English overview)
-EXPERIMENT.md           # Detailed experimental results and analysis
-ARCHITECTURE.md         # System architecture and design decisions
+ARCHITECTURE.md          # Architecture, experimental results, and analysis
 requirements.txt        # Python dependencies
 src/
   config.ini            # All hyperparameters and file paths

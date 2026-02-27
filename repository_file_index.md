@@ -5,11 +5,11 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 ---
 
 ## 1. Project Root & Configuration
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `.gitignore` | Tells Git which files/folders (like logs, cache) to ignore. | Keep |
-| `ARCHITECTURE.md` | Core documentation describing the 5-Model architecture pipeline. | Keep |
-| `EXPERIMENT.md` | Log of experiments, design choices, and training runs. | Keep |
+| `ARCHITECTURE.md` | Core documentation describing the 5-Model architecture pipeline, experimental results, and training configuration. (Absorbed former `EXPERIMENT.md`) | Keep |
 | `README.md` | The main project landing page, outlining requirements and model status. | Keep |
 | `repository_file_index.md` | Exhaustive record mapping every file in the repo to its function. | Keep |
 | `requirements.txt` | Python dependency locking file (pip install -r). | Keep |
@@ -18,6 +18,7 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 ---
 
 ## 2. Root `scripts/` Directory (Analysis & Utils)
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `build_features.py` | Generates enhancement features (e.g. S&P500 returns, realized volatility) to append to the dataset. | Keep |
@@ -27,6 +28,7 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 ---
 
 ## 3. `model1_research/` Directory (Model 1 & Base Pipeline)
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `model.py` | **Model 1**: eSSVI + NN architectures (SSVIModel, SmileModel, SingleModel, MultiModel) and loss functions. | Keep |
@@ -37,6 +39,7 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 | `__init__.py` | Package init. | Keep |
 
 ### `model1_research/scripts/`
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `generate_model1_plots.py` | Generates 4 IV curve fit plots (train/val/test) and loss curve. | Keep |
@@ -45,6 +48,7 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 | `train_diagnose.py` | Specialized training loop with per-epoch parameter tracking. | Keep |
 
 ### `model1_research/tests/`
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `conftest.py` | Model 1 test fixtures (tiny_batch). | Keep |
@@ -54,6 +58,7 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 ---
 
 ## 4. `src/` Directory (Shared Core, HyperIV, DDPM)
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `config.ini` | Core hyperparameters, paths, and training configuration. | Keep |
@@ -71,6 +76,7 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 ---
 
 ## 5. `model2_research/` Directory (Model 2 Local Volatility)
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `README.md` | Model 2 specific architecture documentation. | Keep |
@@ -81,7 +87,9 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 | `train_dupire.py` | **Model 2**: Training loop for the primary PINN local vol network. | Keep |
 
 ### `model2_research/candidates/`
+
 *Contains experimental prior alternatives to Model 2 (Module A Soft Corrections, GNO, Heston...)*
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `gno/README.md` | Graph Neural Operator option pricing experimental notes. | Keep |
@@ -94,18 +102,17 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 ---
 
 ## 6. `model3_research/` Directory (Model 3 Adjustments)
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
-| `README.md` | Overview of the Model 3 architectures (TFT vs xLSTM vs GRU). | Keep |
-| `full_research_report.md` | In-depth analysis report on TFT and xLSTM performance. | Keep |
+| `README.md` | Overview of Model 3 architectures (TFT vs xLSTM vs GRU) and full 12-way comparison results. (Absorbed former `regularization_results.md`) | Keep |
+| `full_research_report.md` | Complete research report: Part I architecture selection, Part II regularization theory & analysis. (Absorbed former `parameter_dynamic_analysis_and_regularization.md`) | Keep |
 | `optimizers.py` | Custom optimizers resolving overfitting (`CPR`, `CautiousAdamW`). | Keep |
-| `parameter_dynamic_analysis_and_regularization.md` | Research notes on parameter dynamics vs overfitting. | Keep |
-| `parameter_dynamic_analysis_and_regularization.txt` | Raw dump text for the regularization analysis. | Keep |
-| `regularization_results.md` | Summary of early stopping and validation bounds after CPR. | Keep |
 | `run_all_experiments.py` | Global python script to kick off multi-model runs. | Keep |
 | `tft_adjustment.py` | **Model 3**: Temporal Fusion Transformer model architecture. | Keep |
 
 ### `model3_research/scripts/`
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `benchmark_dtype.py` | Script comparing float32 vs float64 matrix operations speed. | Keep |
@@ -117,17 +124,20 @@ This document provides a comprehensive, file-by-file breakdown of every file cur
 | `train_models.py` | Unified trainer handling GRU, xLSTM, and TFT, equipped with CPR + logging. | Keep |
 
 ### `model3_research/overfitting_research/`
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `README.md` | Context for overfitting isolation logic. | Keep |
 | `cwd_notes.md` | Notes specifically focusing on Coordinate-wise Descent effectiveness. | Keep |
 
 ### `model3_research/archived_...`
-*(Directories like `archived_logs`, `archived_figures`, `archived_models`) contain hundreds of historically tracked JSON/PNG files and unselected architectures (e.g. `xlstm_adjustment.py`) from the architecture comparison phase before Greek Integration.*
+
+*(Directories like `archived_logs`, `archived_figures`, `archived_models`) contain results from the full 12-way comparison (9 non-winner model checkpoints, their training logs, and metrics JSONs), plus historical files from earlier architecture comparison phases.*
 
 ---
 
 ## 7. `tests/` Directory (Model 1, Model 3, Integration)
+
 | File | Description | Action/Status |
 |------|-------------|---------------|
 | `conftest.py` | Global pytest configuration (sets default dtype to float64, fixes seeds). | Keep |

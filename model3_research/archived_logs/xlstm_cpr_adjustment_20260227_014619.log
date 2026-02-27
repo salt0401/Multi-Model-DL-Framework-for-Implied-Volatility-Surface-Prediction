@@ -1,0 +1,48 @@
+2026-02-27 01:46:19,384 - xlstm_cpr_adjustment - INFO - === Training XLSTM (CPR) Adjustment Model ===
+2026-02-27 01:46:19,387 - xlstm_cpr_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
+2026-02-27 01:46:19,387 - xlstm_cpr_adjustment - INFO - Dtype: float64
+2026-02-27 01:46:19,387 - xlstm_cpr_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
+2026-02-27 01:46:19,527 - xlstm_cpr_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../model1_research/models/MultiModel.pt
+2026-02-27 01:46:19,528 - xlstm_cpr_adjustment - INFO - Loading Model 2 (ICNN Dupire) for Greek Extraction...
+2026-02-27 01:46:19,545 - xlstm_cpr_adjustment - INFO - Model 2 loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../models/DupireModel.pt, GreekExtractor initialized.
+2026-02-27 01:46:19,545 - xlstm_cpr_adjustment - INFO - Preparing adjustment data...
+2026-02-27 01:46:33,707 - xlstm_cpr_adjustment - INFO - Data shape: sequences=torch.Size([245228, 20, 16]), targets=torch.Size([245228, 1]), input_dim=16
+2026-02-27 01:46:33,709 - xlstm_cpr_adjustment - INFO - Config date split: train+val <= 2020-12-31, test 2021-01-01 - 2021-12-31
+2026-02-27 01:46:33,709 - xlstm_cpr_adjustment - INFO -   train+val sequences: 201729, test sequences: 43499
+2026-02-27 01:46:33,719 - xlstm_cpr_adjustment - INFO - Chronological 80/20 split within train period:
+2026-02-27 01:46:33,720 - xlstm_cpr_adjustment - INFO -   Train: < 2019-08-13T00:00:00.000000000 (153249 sequences)
+2026-02-27 01:46:33,720 - xlstm_cpr_adjustment - INFO -   Val:   >= 2019-08-13T00:00:00.000000000 to 2020-12-31T00:00:00.000000 (48480 sequences)
+2026-02-27 01:46:33,721 - xlstm_cpr_adjustment - INFO -   Test:  2021-01-01T00:00:00.000000 to 2021-12-31T00:00:00.000000 (43499 sequences)
+2026-02-27 01:46:33,721 - xlstm_cpr_adjustment - INFO - Fitting KDE weights...
+2026-02-27 01:48:24,310 - xlstm_cpr_adjustment - INFO - Test set: 43499 sequences loaded
+2026-02-27 01:48:24,314 - xlstm_cpr_adjustment - INFO - Building xlstm model...
+2026-02-27 01:48:24,323 - xlstm_cpr_adjustment - INFO - Model parameters: 40,165 total, 40,165 trainable
+2026-02-27 01:48:25,601 - xlstm_cpr_adjustment - INFO - Optimizer: cpr (wd=N/A)
+2026-02-27 01:48:25,601 - xlstm_cpr_adjustment - INFO - Training: epochs=1000, lr=0.001, batch_size=256
+2026-02-27 01:48:25,601 - xlstm_cpr_adjustment - INFO - Save path: C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\models\xlstm_cpr_AdjustmentModel.pt
+2026-02-27 01:59:19,111 - xlstm_cpr_adjustment - INFO - Epoch 10/1000 - Train: 0.124891 - Val: 0.199721 - Best: 0.193734 - LR: 1.00e-03 - Time: 10.9min
+2026-02-27 02:11:05,412 - xlstm_cpr_adjustment - INFO - Epoch 20/1000 - Train: 0.109941 - Val: 0.221524 - Best: 0.193734 - LR: 1.00e-03 - Time: 22.7min
+2026-02-27 02:22:33,033 - xlstm_cpr_adjustment - INFO - Epoch 30/1000 - Train: 0.108456 - Val: 0.204436 - Best: 0.193734 - LR: 1.00e-03 - Time: 34.1min
+2026-02-27 02:34:03,062 - xlstm_cpr_adjustment - INFO - Epoch 40/1000 - Train: 0.104785 - Val: 0.213431 - Best: 0.190132 - LR: 1.00e-03 - Time: 45.6min
+2026-02-27 02:47:17,206 - xlstm_cpr_adjustment - INFO - Epoch 50/1000 - Train: 0.103243 - Val: 0.243894 - Best: 0.190132 - LR: 1.00e-03 - Time: 58.9min
+2026-02-27 03:02:03,394 - xlstm_cpr_adjustment - INFO - Epoch 60/1000 - Train: 0.099366 - Val: 0.210430 - Best: 0.190132 - LR: 1.00e-03 - Time: 73.6min
+2026-02-27 03:15:42,521 - xlstm_cpr_adjustment - INFO - Epoch 70/1000 - Train: 0.096093 - Val: 0.225570 - Best: 0.190028 - LR: 1.00e-03 - Time: 87.3min
+2026-02-27 03:28:06,852 - xlstm_cpr_adjustment - INFO - Epoch 80/1000 - Train: 0.094729 - Val: 0.237090 - Best: 0.185868 - LR: 1.00e-03 - Time: 99.7min
+2026-02-27 03:40:05,174 - xlstm_cpr_adjustment - INFO - Epoch 90/1000 - Train: 0.093852 - Val: 0.206111 - Best: 0.183357 - LR: 1.00e-03 - Time: 111.7min
+2026-02-27 03:51:56,055 - xlstm_cpr_adjustment - INFO - Epoch 100/1000 - Train: 0.095440 - Val: 0.194179 - Best: 0.183357 - LR: 1.00e-03 - Time: 123.5min
+2026-02-27 04:04:16,673 - xlstm_cpr_adjustment - INFO - Epoch 110/1000 - Train: 0.093906 - Val: 0.208716 - Best: 0.183357 - LR: 1.00e-03 - Time: 135.9min
+2026-02-27 04:17:17,264 - xlstm_cpr_adjustment - INFO - Epoch 120/1000 - Train: 0.093349 - Val: 0.207332 - Best: 0.183357 - LR: 1.00e-03 - Time: 148.9min
+2026-02-27 04:29:24,823 - xlstm_cpr_adjustment - INFO - Epoch 130/1000 - Train: 0.092626 - Val: 0.190294 - Best: 0.183357 - LR: 1.00e-03 - Time: 161.0min
+2026-02-27 04:40:57,240 - xlstm_cpr_adjustment - INFO - Epoch 140/1000 - Train: 0.087202 - Val: 0.208490 - Best: 0.183357 - LR: 5.00e-04 - Time: 172.5min
+2026-02-27 04:52:29,241 - xlstm_cpr_adjustment - INFO - Epoch 150/1000 - Train: 0.085206 - Val: 0.199020 - Best: 0.183357 - LR: 5.00e-04 - Time: 184.1min
+2026-02-27 05:03:58,346 - xlstm_cpr_adjustment - INFO - Epoch 160/1000 - Train: 0.085222 - Val: 0.217770 - Best: 0.183357 - LR: 5.00e-04 - Time: 195.5min
+2026-02-27 05:15:24,526 - xlstm_cpr_adjustment - INFO - Epoch 170/1000 - Train: 0.085103 - Val: 0.201445 - Best: 0.183357 - LR: 5.00e-04 - Time: 207.0min
+2026-02-27 05:26:53,167 - xlstm_cpr_adjustment - INFO - Epoch 180/1000 - Train: 0.085315 - Val: 0.192831 - Best: 0.183357 - LR: 5.00e-04 - Time: 218.5min
+2026-02-27 05:36:02,828 - xlstm_cpr_adjustment - INFO - Early stopping at epoch 188
+2026-02-27 05:36:02,828 - xlstm_cpr_adjustment - INFO - Training complete: 227.6 minutes, best val loss: 0.183357
+2026-02-27 05:36:02,828 - xlstm_cpr_adjustment - INFO - Final evaluation on validation set...
+2026-02-27 05:36:08,329 - xlstm_cpr_adjustment - INFO - XLSTM Val - RMSE: 0.171642, MAPE: 0.1053
+2026-02-27 05:36:08,329 - xlstm_cpr_adjustment - INFO - Evaluating on test set (2021 held-out)...
+2026-02-27 05:36:13,231 - xlstm_cpr_adjustment - INFO - XLSTM Test (2021) - RMSE: 0.166257, MAPE: 0.1025
+2026-02-27 05:36:13,233 - xlstm_cpr_adjustment - INFO - Results saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\logs\xlstm_cpr_results.json
+2026-02-27 05:36:13,235 - xlstm_cpr_adjustment - INFO - Done.

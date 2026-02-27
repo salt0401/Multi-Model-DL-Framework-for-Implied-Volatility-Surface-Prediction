@@ -1,0 +1,44 @@
+2026-02-27 05:36:33,669 - xlstm_adamw_adjustment - INFO - === Training XLSTM (ADAMW) Adjustment Model ===
+2026-02-27 05:36:33,674 - xlstm_adamw_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
+2026-02-27 05:36:33,674 - xlstm_adamw_adjustment - INFO - Dtype: float64
+2026-02-27 05:36:33,674 - xlstm_adamw_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
+2026-02-27 05:36:33,815 - xlstm_adamw_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../model1_research/models/MultiModel.pt
+2026-02-27 05:36:33,816 - xlstm_adamw_adjustment - INFO - Loading Model 2 (ICNN Dupire) for Greek Extraction...
+2026-02-27 05:36:33,842 - xlstm_adamw_adjustment - INFO - Model 2 loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../models/DupireModel.pt, GreekExtractor initialized.
+2026-02-27 05:36:33,843 - xlstm_adamw_adjustment - INFO - Preparing adjustment data...
+2026-02-27 05:36:45,081 - xlstm_adamw_adjustment - INFO - Data shape: sequences=torch.Size([245228, 20, 16]), targets=torch.Size([245228, 1]), input_dim=16
+2026-02-27 05:36:45,083 - xlstm_adamw_adjustment - INFO - Config date split: train+val <= 2020-12-31, test 2021-01-01 - 2021-12-31
+2026-02-27 05:36:45,085 - xlstm_adamw_adjustment - INFO -   train+val sequences: 201729, test sequences: 43499
+2026-02-27 05:36:45,095 - xlstm_adamw_adjustment - INFO - Chronological 80/20 split within train period:
+2026-02-27 05:36:45,096 - xlstm_adamw_adjustment - INFO -   Train: < 2019-08-13T00:00:00.000000000 (153249 sequences)
+2026-02-27 05:36:45,096 - xlstm_adamw_adjustment - INFO -   Val:   >= 2019-08-13T00:00:00.000000000 to 2020-12-31T00:00:00.000000 (48480 sequences)
+2026-02-27 05:36:45,098 - xlstm_adamw_adjustment - INFO -   Test:  2021-01-01T00:00:00.000000 to 2021-12-31T00:00:00.000000 (43499 sequences)
+2026-02-27 05:36:45,098 - xlstm_adamw_adjustment - INFO - Fitting KDE weights...
+2026-02-27 05:38:43,547 - xlstm_adamw_adjustment - INFO - Test set: 43499 sequences loaded
+2026-02-27 05:38:43,548 - xlstm_adamw_adjustment - INFO - Building xlstm model...
+2026-02-27 05:38:43,553 - xlstm_adamw_adjustment - INFO - Model parameters: 40,165 total, 40,165 trainable
+2026-02-27 05:38:44,796 - xlstm_adamw_adjustment - INFO - Optimizer: adamw (wd=0.01)
+2026-02-27 05:38:44,796 - xlstm_adamw_adjustment - INFO - Training: epochs=1000, lr=0.001, batch_size=256
+2026-02-27 05:38:44,797 - xlstm_adamw_adjustment - INFO - Save path: C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\models\xlstm_adamw_AdjustmentModel.pt
+2026-02-27 05:49:51,215 - xlstm_adamw_adjustment - INFO - Epoch 10/1000 - Train: 0.102950 - Val: 0.198006 - Best: 0.194742 - LR: 1.00e-03 - Time: 11.1min
+2026-02-27 06:01:02,367 - xlstm_adamw_adjustment - INFO - Epoch 20/1000 - Train: 0.091048 - Val: 0.231783 - Best: 0.194742 - LR: 1.00e-03 - Time: 22.3min
+2026-02-27 06:12:23,629 - xlstm_adamw_adjustment - INFO - Epoch 30/1000 - Train: 0.079233 - Val: 0.201915 - Best: 0.194742 - LR: 1.00e-03 - Time: 33.6min
+2026-02-27 06:24:01,404 - xlstm_adamw_adjustment - INFO - Epoch 40/1000 - Train: 0.073281 - Val: 0.189105 - Best: 0.183102 - LR: 1.00e-03 - Time: 45.3min
+2026-02-27 06:35:34,768 - xlstm_adamw_adjustment - INFO - Epoch 50/1000 - Train: 0.070933 - Val: 0.185366 - Best: 0.167874 - LR: 1.00e-03 - Time: 56.8min
+2026-02-27 06:47:04,138 - xlstm_adamw_adjustment - INFO - Epoch 60/1000 - Train: 0.067588 - Val: 0.184234 - Best: 0.167874 - LR: 1.00e-03 - Time: 68.3min
+2026-02-27 06:58:36,730 - xlstm_adamw_adjustment - INFO - Epoch 70/1000 - Train: 0.065997 - Val: 0.183196 - Best: 0.167874 - LR: 1.00e-03 - Time: 79.9min
+2026-02-27 07:10:09,445 - xlstm_adamw_adjustment - INFO - Epoch 80/1000 - Train: 0.064554 - Val: 0.180629 - Best: 0.167874 - LR: 1.00e-03 - Time: 91.4min
+2026-02-27 07:21:44,271 - xlstm_adamw_adjustment - INFO - Epoch 90/1000 - Train: 0.063036 - Val: 0.195594 - Best: 0.167874 - LR: 1.00e-03 - Time: 103.0min
+2026-02-27 07:33:13,212 - xlstm_adamw_adjustment - INFO - Epoch 100/1000 - Train: 0.059681 - Val: 0.185605 - Best: 0.167874 - LR: 5.00e-04 - Time: 114.5min
+2026-02-27 07:44:49,236 - xlstm_adamw_adjustment - INFO - Epoch 110/1000 - Train: 0.058373 - Val: 0.180326 - Best: 0.167874 - LR: 5.00e-04 - Time: 126.1min
+2026-02-27 07:56:23,216 - xlstm_adamw_adjustment - INFO - Epoch 120/1000 - Train: 0.058257 - Val: 0.181676 - Best: 0.167874 - LR: 5.00e-04 - Time: 137.6min
+2026-02-27 08:08:10,979 - xlstm_adamw_adjustment - INFO - Epoch 130/1000 - Train: 0.057668 - Val: 0.184535 - Best: 0.167874 - LR: 5.00e-04 - Time: 149.4min
+2026-02-27 08:19:44,408 - xlstm_adamw_adjustment - INFO - Epoch 140/1000 - Train: 0.057249 - Val: 0.192639 - Best: 0.167874 - LR: 5.00e-04 - Time: 161.0min
+2026-02-27 08:29:02,011 - xlstm_adamw_adjustment - INFO - Early stopping at epoch 148
+2026-02-27 08:29:02,011 - xlstm_adamw_adjustment - INFO - Training complete: 170.3 minutes, best val loss: 0.167874
+2026-02-27 08:29:02,011 - xlstm_adamw_adjustment - INFO - Final evaluation on validation set...
+2026-02-27 08:29:07,333 - xlstm_adamw_adjustment - INFO - XLSTM Val - RMSE: 0.161994, MAPE: 0.0983
+2026-02-27 08:29:07,334 - xlstm_adamw_adjustment - INFO - Evaluating on test set (2021 held-out)...
+2026-02-27 08:29:12,187 - xlstm_adamw_adjustment - INFO - XLSTM Test (2021) - RMSE: 0.167852, MAPE: 0.1037
+2026-02-27 08:29:12,191 - xlstm_adamw_adjustment - INFO - Results saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\logs\xlstm_adamw_results.json
+2026-02-27 08:29:12,193 - xlstm_adamw_adjustment - INFO - Done.

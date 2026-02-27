@@ -1,0 +1,43 @@
+2026-02-27 01:14:47,837 - baseline_adam_adjustment - INFO - === Training BASELINE (ADAM) Adjustment Model ===
+2026-02-27 01:14:47,839 - baseline_adam_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
+2026-02-27 01:14:47,840 - baseline_adam_adjustment - INFO - Dtype: float64
+2026-02-27 01:14:47,840 - baseline_adam_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
+2026-02-27 01:14:47,944 - baseline_adam_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../model1_research/models/MultiModel.pt
+2026-02-27 01:14:47,944 - baseline_adam_adjustment - INFO - Loading Model 2 (ICNN Dupire) for Greek Extraction...
+2026-02-27 01:14:47,959 - baseline_adam_adjustment - INFO - Model 2 loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../models/DupireModel.pt, GreekExtractor initialized.
+2026-02-27 01:14:47,960 - baseline_adam_adjustment - INFO - Preparing adjustment data...
+2026-02-27 01:14:58,726 - baseline_adam_adjustment - INFO - Data shape: sequences=torch.Size([245228, 20, 16]), targets=torch.Size([245228, 1]), input_dim=16
+2026-02-27 01:14:58,728 - baseline_adam_adjustment - INFO - Config date split: train+val <= 2020-12-31, test 2021-01-01 - 2021-12-31
+2026-02-27 01:14:58,729 - baseline_adam_adjustment - INFO -   train+val sequences: 201729, test sequences: 43499
+2026-02-27 01:14:58,736 - baseline_adam_adjustment - INFO - Chronological 80/20 split within train period:
+2026-02-27 01:14:58,736 - baseline_adam_adjustment - INFO -   Train: < 2019-08-13T00:00:00.000000000 (153249 sequences)
+2026-02-27 01:14:58,737 - baseline_adam_adjustment - INFO -   Val:   >= 2019-08-13T00:00:00.000000000 to 2020-12-31T00:00:00.000000 (48480 sequences)
+2026-02-27 01:14:58,737 - baseline_adam_adjustment - INFO -   Test:  2021-01-01T00:00:00.000000 to 2021-12-31T00:00:00.000000 (43499 sequences)
+2026-02-27 01:14:58,738 - baseline_adam_adjustment - INFO - Fitting KDE weights...
+2026-02-27 01:16:38,450 - baseline_adam_adjustment - INFO - Test set: 43499 sequences loaded
+2026-02-27 01:16:38,450 - baseline_adam_adjustment - INFO - Building baseline model...
+2026-02-27 01:16:38,474 - baseline_adam_adjustment - INFO - Model parameters: 59,457 total, 59,457 trainable
+2026-02-27 01:16:39,341 - baseline_adam_adjustment - INFO - Optimizer: adam (wd=N/A)
+2026-02-27 01:16:39,342 - baseline_adam_adjustment - INFO - Training: epochs=1000, lr=0.001, batch_size=256
+2026-02-27 01:16:39,342 - baseline_adam_adjustment - INFO - Save path: C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\models\baseline_AdjustmentModel.pt
+2026-02-27 01:18:54,053 - baseline_adam_adjustment - INFO - Epoch 10/1000 - Train: 0.101323 - Val: 0.211577 - Best: 0.183769 - LR: 1.00e-03 - Time: 2.2min
+2026-02-27 01:21:04,833 - baseline_adam_adjustment - INFO - Epoch 20/1000 - Train: 0.074741 - Val: 0.187111 - Best: 0.183769 - LR: 1.00e-03 - Time: 4.4min
+2026-02-27 01:23:16,496 - baseline_adam_adjustment - INFO - Epoch 30/1000 - Train: 0.063931 - Val: 0.176496 - Best: 0.176496 - LR: 1.00e-03 - Time: 6.6min
+2026-02-27 01:25:30,051 - baseline_adam_adjustment - INFO - Epoch 40/1000 - Train: 0.057779 - Val: 0.191706 - Best: 0.176496 - LR: 1.00e-03 - Time: 8.8min
+2026-02-27 01:27:43,509 - baseline_adam_adjustment - INFO - Epoch 50/1000 - Train: 0.053959 - Val: 0.200699 - Best: 0.176496 - LR: 1.00e-03 - Time: 11.1min
+2026-02-27 01:29:56,930 - baseline_adam_adjustment - INFO - Epoch 60/1000 - Train: 0.052126 - Val: 0.201600 - Best: 0.176496 - LR: 1.00e-03 - Time: 13.3min
+2026-02-27 01:32:10,871 - baseline_adam_adjustment - INFO - Epoch 70/1000 - Train: 0.049327 - Val: 0.197876 - Best: 0.176496 - LR: 1.00e-03 - Time: 15.5min
+2026-02-27 01:34:25,906 - baseline_adam_adjustment - INFO - Epoch 80/1000 - Train: 0.047813 - Val: 0.199549 - Best: 0.176496 - LR: 1.00e-03 - Time: 17.8min
+2026-02-27 01:36:40,239 - baseline_adam_adjustment - INFO - Epoch 90/1000 - Train: 0.045197 - Val: 0.190431 - Best: 0.176496 - LR: 5.00e-04 - Time: 20.0min
+2026-02-27 01:38:53,072 - baseline_adam_adjustment - INFO - Epoch 100/1000 - Train: 0.043946 - Val: 0.193848 - Best: 0.176496 - LR: 5.00e-04 - Time: 22.2min
+2026-02-27 01:41:08,795 - baseline_adam_adjustment - INFO - Epoch 110/1000 - Train: 0.043810 - Val: 0.197238 - Best: 0.176496 - LR: 5.00e-04 - Time: 24.5min
+2026-02-27 01:43:35,485 - baseline_adam_adjustment - INFO - Epoch 120/1000 - Train: 0.042651 - Val: 0.195283 - Best: 0.176496 - LR: 5.00e-04 - Time: 26.9min
+2026-02-27 01:46:11,230 - baseline_adam_adjustment - INFO - Epoch 130/1000 - Train: 0.042361 - Val: 0.207990 - Best: 0.176496 - LR: 5.00e-04 - Time: 29.5min
+2026-02-27 01:46:11,231 - baseline_adam_adjustment - INFO - Early stopping at epoch 130
+2026-02-27 01:46:11,231 - baseline_adam_adjustment - INFO - Training complete: 29.5 minutes, best val loss: 0.176496
+2026-02-27 01:46:11,231 - baseline_adam_adjustment - INFO - Final evaluation on validation set...
+2026-02-27 01:46:12,988 - baseline_adam_adjustment - INFO - BASELINE Val - RMSE: 0.169928, MAPE: 0.0996
+2026-02-27 01:46:12,988 - baseline_adam_adjustment - INFO - Evaluating on test set (2021 held-out)...
+2026-02-27 01:46:14,675 - baseline_adam_adjustment - INFO - BASELINE Test (2021) - RMSE: 0.165178, MAPE: 0.0987
+2026-02-27 01:46:14,676 - baseline_adam_adjustment - INFO - Results saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\logs\baseline_results.json
+2026-02-27 01:46:14,679 - baseline_adam_adjustment - INFO - Done.

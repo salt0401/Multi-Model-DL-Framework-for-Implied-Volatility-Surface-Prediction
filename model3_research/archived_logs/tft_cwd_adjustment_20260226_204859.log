@@ -1,0 +1,62 @@
+2026-02-26 20:48:59,501 - tft_cwd_adjustment - INFO - === Training TFT (CWD) Adjustment Model ===
+2026-02-26 20:48:59,506 - tft_cwd_adjustment - INFO - Device: cuda:0 (GPU: NVIDIA GeForce RTX 4060 Laptop GPU)
+2026-02-26 20:48:59,506 - tft_cwd_adjustment - INFO - Dtype: float32
+2026-02-26 20:48:59,506 - tft_cwd_adjustment - INFO - Loading base model (Model 1 SSVI+NN)...
+2026-02-26 20:48:59,687 - tft_cwd_adjustment - INFO - Base model loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../model1_research/models/MultiModel.pt
+2026-02-26 20:48:59,687 - tft_cwd_adjustment - INFO - Loading Model 2 (ICNN Dupire) for Greek Extraction...
+2026-02-26 20:48:59,705 - tft_cwd_adjustment - INFO - Model 2 loaded from C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\..\..\src\../models/DupireModel.pt, GreekExtractor initialized.
+2026-02-26 20:48:59,705 - tft_cwd_adjustment - INFO - Preparing adjustment data...
+2026-02-26 20:49:10,187 - tft_cwd_adjustment - INFO - Data shape: sequences=torch.Size([245228, 20, 16]), targets=torch.Size([245228, 1]), input_dim=16
+2026-02-26 20:49:10,190 - tft_cwd_adjustment - INFO - Config date split: train+val <= 2020-12-31, test 2021-01-01 - 2021-12-31
+2026-02-26 20:49:10,196 - tft_cwd_adjustment - INFO -   train+val sequences: 201729, test sequences: 43499
+2026-02-26 20:49:10,214 - tft_cwd_adjustment - INFO - Chronological 80/20 split within train period:
+2026-02-26 20:49:10,225 - tft_cwd_adjustment - INFO -   Train: < 2019-08-13T00:00:00.000000000 (153249 sequences)
+2026-02-26 20:49:10,229 - tft_cwd_adjustment - INFO -   Val:   >= 2019-08-13T00:00:00.000000000 to 2020-12-31T00:00:00.000000 (48480 sequences)
+2026-02-26 20:49:10,230 - tft_cwd_adjustment - INFO -   Test:  2021-01-01T00:00:00.000000 to 2021-12-31T00:00:00.000000 (43499 sequences)
+2026-02-26 20:49:10,231 - tft_cwd_adjustment - INFO - Fitting KDE weights...
+2026-02-26 20:50:39,242 - tft_cwd_adjustment - INFO - Test set: 43499 sequences loaded
+2026-02-26 20:50:39,243 - tft_cwd_adjustment - INFO - Building tft model...
+2026-02-26 20:50:39,294 - tft_cwd_adjustment - INFO - Model parameters: 317,521 total, 317,521 trainable
+2026-02-26 20:50:40,339 - tft_cwd_adjustment - INFO - Optimizer: cwd (wd=0.01)
+2026-02-26 20:50:40,340 - tft_cwd_adjustment - INFO - Training: epochs=1000, lr=0.001, batch_size=256
+2026-02-26 20:50:40,340 - tft_cwd_adjustment - INFO - Save path: C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\models\tft_cwd_fp32_AdjustmentModel.pt
+2026-02-26 21:00:34,198 - tft_cwd_adjustment - INFO - Epoch 10/1000 - Train: 0.069992 - Val: 0.180618 - Best: 0.180618 - LR: 1.00e-03 - Time: 9.9min
+2026-02-26 21:10:10,062 - tft_cwd_adjustment - INFO - Epoch 20/1000 - Train: 0.047686 - Val: 0.170232 - Best: 0.170232 - LR: 1.00e-03 - Time: 19.5min
+2026-02-26 21:20:27,199 - tft_cwd_adjustment - INFO - Epoch 30/1000 - Train: 0.040257 - Val: 0.186069 - Best: 0.161609 - LR: 1.00e-03 - Time: 29.8min
+2026-02-26 21:29:11,787 - tft_cwd_adjustment - INFO - Epoch 40/1000 - Train: 0.035030 - Val: 0.168960 - Best: 0.161609 - LR: 1.00e-03 - Time: 38.5min
+2026-02-26 21:38:55,585 - tft_cwd_adjustment - INFO - Epoch 50/1000 - Train: 0.031697 - Val: 0.179153 - Best: 0.161609 - LR: 1.00e-03 - Time: 48.3min
+2026-02-26 21:48:58,862 - tft_cwd_adjustment - INFO - Epoch 60/1000 - Train: 0.030093 - Val: 0.178334 - Best: 0.161609 - LR: 1.00e-03 - Time: 58.3min
+2026-02-26 21:58:57,447 - tft_cwd_adjustment - INFO - Epoch 70/1000 - Train: 0.029201 - Val: 0.178337 - Best: 0.161609 - LR: 1.00e-03 - Time: 68.3min
+2026-02-26 22:09:00,515 - tft_cwd_adjustment - INFO - Epoch 80/1000 - Train: 0.025141 - Val: 0.180599 - Best: 0.161609 - LR: 5.00e-04 - Time: 78.3min
+2026-02-26 22:19:53,046 - tft_cwd_adjustment - INFO - Epoch 90/1000 - Train: 0.025378 - Val: 0.182076 - Best: 0.161609 - LR: 5.00e-04 - Time: 89.2min
+2026-02-26 22:30:32,966 - tft_cwd_adjustment - INFO - Epoch 100/1000 - Train: 0.024535 - Val: 0.183592 - Best: 0.161609 - LR: 5.00e-04 - Time: 99.9min
+2026-02-26 22:40:29,263 - tft_cwd_adjustment - INFO - Epoch 110/1000 - Train: 0.023757 - Val: 0.183168 - Best: 0.161609 - LR: 5.00e-04 - Time: 109.8min
+2026-02-26 22:50:38,518 - tft_cwd_adjustment - INFO - Epoch 120/1000 - Train: 0.023559 - Val: 0.183915 - Best: 0.161609 - LR: 5.00e-04 - Time: 120.0min
+2026-02-26 22:52:47,895 - tft_cwd_adjustment - INFO - Early stopping at epoch 122
+2026-02-26 22:52:47,895 - tft_cwd_adjustment - INFO - Training complete: 122.1 minutes, best val loss: 0.161609
+2026-02-26 22:52:47,896 - tft_cwd_adjustment - INFO - Final evaluation on validation set...
+2026-02-26 22:52:51,306 - tft_cwd_adjustment - INFO - TFT Val - RMSE: 0.159045, MAPE: 0.0953
+2026-02-26 22:52:51,306 - tft_cwd_adjustment - INFO - Evaluating on test set (2021 held-out)...
+2026-02-26 22:52:54,067 - tft_cwd_adjustment - INFO - TFT Test (2021) - RMSE: 0.160760, MAPE: 0.0975
+2026-02-26 22:52:54,069 - tft_cwd_adjustment - INFO - Results saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\logs\tft_cwd_fp32_results.json
+2026-02-26 22:52:54,071 - tft_cwd_adjustment - INFO - Running TFT interpretability analysis...
+2026-02-26 22:52:54,114 - tft_cwd_adjustment - INFO - Feature importance (avg across timesteps):
+2026-02-26 22:52:54,115 - tft_cwd_adjustment - INFO -   tv_pred: 0.1852
+2026-02-26 22:52:54,115 - tft_cwd_adjustment - INFO -   iv_skew: 0.1820
+2026-02-26 22:52:54,115 - tft_cwd_adjustment - INFO -   tau: 0.1087
+2026-02-26 22:52:54,115 - tft_cwd_adjustment - INFO -   rv_20d: 0.0752
+2026-02-26 22:52:54,116 - tft_cwd_adjustment - INFO -   vix_change: 0.0658
+2026-02-26 22:52:54,116 - tft_cwd_adjustment - INFO -   vrp_20d: 0.0566
+2026-02-26 22:52:54,116 - tft_cwd_adjustment - INFO -   local_vol: 0.0468
+2026-02-26 22:52:54,116 - tft_cwd_adjustment - INFO -   futures_basis_pct: 0.0456
+2026-02-26 22:52:54,116 - tft_cwd_adjustment - INFO -   underlying_return: 0.0323
+2026-02-26 22:52:54,116 - tft_cwd_adjustment - INFO -   logm: 0.0289
+2026-02-26 22:52:54,117 - tft_cwd_adjustment - INFO -   sp500_return: 0.0150
+2026-02-26 22:52:54,117 - tft_cwd_adjustment - INFO -   iv_term_slope: 0.0141
+2026-02-26 22:52:54,117 - tft_cwd_adjustment - INFO -   lv_gradient_K: 0.0141
+2026-02-26 22:52:54,118 - tft_cwd_adjustment - INFO -   itm_otm: 0.0109
+2026-02-26 22:52:54,118 - tft_cwd_adjustment - INFO -   volga: 0.0039
+2026-02-26 22:52:54,118 - tft_cwd_adjustment - INFO -   vanna: 0.0035
+2026-02-26 22:52:54,119 - tft_cwd_adjustment - INFO - Temporal attention (last 5 steps): [0.052825260907411575, 0.0611707903444767, 0.07037866860628128, 0.07935338467359543, 0.13267391920089722]
+2026-02-26 22:52:54,125 - tft_cwd_adjustment - INFO - Interpretability data saved to C:\Users\owen3\OneDrive\Desktop\Project\smart-data-analysis-main\model3_research\scripts\logs\tft_interpretability.json
+2026-02-26 22:52:54,125 - tft_cwd_adjustment - INFO - Done.

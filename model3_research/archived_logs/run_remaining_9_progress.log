@@ -1,0 +1,30 @@
+=== 9-Combination Runner Started: 2026-02-26T20:48:43.103626 ===
+
+[1/9] Starting tft+cwd (float32) at 2026-02-26T20:48:43.103626
+[1/9] tft+cwd (float32): SUCCESS in 124.2 min
+
+[2/9] Starting tft+adam (float32) at 2026-02-26T22:52:55.267281
+[2/9] tft+adam (float32): SUCCESS in 53.6 min
+
+[3/9] Starting baseline+cpr (float64) at 2026-02-26T23:46:29.959384
+[3/9] baseline+cpr (float64): SUCCESS in 44.6 min
+
+[4/9] Starting baseline+adamw (float64) at 2026-02-27T00:31:04.547475
+[4/9] baseline+adamw (float64): SUCCESS in 43.7 min
+
+[5/9] Starting baseline+adam (float64) at 2026-02-27T01:14:43.917050
+[5/9] baseline+adam (float64): SUCCESS in 31.5 min
+
+[6/9] Starting xlstm+cpr (float64) at 2026-02-27T01:46:15.777226
+[6/9] xlstm+cpr (float64): SUCCESS in 230.0 min
+
+[7/9] Starting xlstm+adamw (float64) at 2026-02-27T05:36:14.553017
+[7/9] xlstm+adamw (float64): SUCCESS in 173.0 min
+
+[8/9] Starting xlstm+cwd (float64) at 2026-02-27T08:29:13.057944
+[8/9] xlstm+cwd (float64): SUCCESS in 204.7 min
+
+[9/9] Starting xlstm+adam (float64) at 2026-02-27T11:53:52.412176
+[9/9] xlstm+adam (float64): SUCCESS in 233.7 min
+
+=== All 9 combinations finished: 2026-02-27T15:47:35.030354 ===
