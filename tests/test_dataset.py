@@ -186,6 +186,42 @@ class TestPrepareAdjustmentData:
             for d in seq_dates:
                 assert d in all_dates
 
+    def test_sp500_return_lagged_one_day(self, _adj_setup):
+        """sp500_return dated day t is the US close realized ~15h AFTER
+        Taiwan's close on day t; a day-t target may only see day t-1's value."""
+        dp, base_model = _adj_setup
+        dates = sorted(dp.prs_dataset['date'].unique())
+        sp500 = np.arange(1, len(dates) + 1) * 0.01
+        dp.load_enhancement_features = lambda: pd.DataFrame(
+            {'date': dates, 'sp500_return': sp500})
+        sequences, _, _, seq_dates = dp.prepare_adjustment_data(
+            base_model, torch.device('cpu'), sequence_length=3)
+        sp_idx = 6  # after the 6 base features
+        date_pos = {pd.Timestamp(d): k for k, d in enumerate(dates)}
+        assert len(seq_dates) > 0
+        for i, d in enumerate(seq_dates):
+            k = date_pos[pd.Timestamp(d)]
+            expected = sp500[k - 1] if k >= 1 else 0.0
+            assert sequences[i, -1, sp_idx].item() == pytest.approx(expected), \
+                f'day {d}: saw same-day US close (leak)'
+
+    def test_vix_change_lagged_one_day(self, _adj_setup):
+        """vix_change comes from the US CBOE VIX close — same timing leak."""
+        dp, base_model = _adj_setup
+        vix_df = dp.load_vix_data().reset_index(drop=True)
+        dates = sorted(dp.prs_dataset['date'].unique())
+        sequences, _, _, seq_dates = dp.prepare_adjustment_data(
+            base_model, torch.device('cpu'), sequence_length=3)
+        date_pos = {pd.Timestamp(d): k for k, d in enumerate(dates)}
+        assert len(seq_dates) > 0
+        for i, d in enumerate(seq_dates):
+            k = date_pos[pd.Timestamp(d)]
+            expected = vix_df['vix_change'].iloc[k - 1] if k >= 1 else np.nan
+            if np.isnan(expected):
+                continue  # NaN rows are dropped by dropna, never surface
+            assert sequences[i, -1, 0].item() == pytest.approx(expected), \
+                f'day {d}: saw same-day US VIX close (leak)'
+
 
 # ── getYATM ───────────────────────────────────────────────────────────
 
@@ -198,3 +234,26 @@ class TestGetYATM:
         # y_atm should exist
         assert 'y_atm' in dp.prs_dataset.columns
         assert dp.prs_dataset['y_atm'].notna().all()
+
+
+class TestGetYATMLeakageGuard:
+    def test_syn_curve_uses_train_dates_only(self, mock_config, mock_prs_dataset):
+        """Post-cutoff dates must not influence the synthetic-c6 ATM curve."""
+        import pandas as pd
+        from dataset import DataProcessor
+        dp = DataProcessor(mock_config)
+        df = mock_prs_dataset.copy()
+        cutoff = pd.Timestamp('2020-01-06')
+        df.loc[df['date'] > cutoff, 'total_var'] = 5.0  # absurd post-cutoff tv
+        dp.prs_dataset = df
+        dp.syn_dataset = pd.DataFrame({'tau': [0.1, 0.5, 1.0],
+                                       'logm': [-2.0, 2.0, 2.5]})
+        dp.getYATM(train_end_date=cutoff)
+        assert dp.syn_dataset['y_atm'].max() < 1.0
+
+    def test_call_passes_config_cutoff(self):
+        """DataProcessor.__call__ must forward train_end_date to getYATM."""
+        import inspect
+        from dataset import DataProcessor
+        src = inspect.getsource(DataProcessor.__call__)
+        assert 'train_end_date' in src

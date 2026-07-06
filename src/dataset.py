@@ -3,6 +3,7 @@ import pandas as pd
 import pickle as pkl
 import os
 from ast import literal_eval
+from datetime import datetime
 
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
@@ -48,7 +49,14 @@ class DataProcessor():
     def __call__(self):
         self.prs_dataset = self.preprocess()
         self.syn_dataset = self.synthesize()
-        self.getYATM()
+        # Restrict the synthetic-c6 ATM curve to training dates (leakage guard)
+        train_end_date = None
+        try:
+            train_end_date = datetime.strptime(
+                self.config['training']['train_end_date'].strip(), '%Y%m%d')
+        except (KeyError, ValueError):
+            pass
+        self.getYATM(train_end_date=train_end_date)
 
     def preprocess(self):
         print('Preprocessing dataset...')
@@ -397,6 +405,10 @@ class DataProcessor():
         Returns padded sequences with features:
         [vix_change, underlying_return, logm, tau, tv_pred, itm_otm]
         + optional Greeks: [local_vol, vanna, volga, lv_gradient_K]
+
+        US-close features (vix_change, sp500_return) are lagged one row so a
+        day-t sequence only sees information available before Taiwan's day-t
+        close (the target tv_ratio is a day-t Taiwan-close quantity).
         """
         import torch
 
@@ -413,6 +425,14 @@ class DataProcessor():
         daily_underlying['underlying_return'] = daily_underlying['underlying'].pct_change()
 
         df = pd.merge(df, daily_underlying[['date', 'underlying_return']], on='date', how='left')
+
+        # vix_change and sp500_return are US closes: the value dated day t is
+        # realized ~15h AFTER Taiwan's close on day t, so the same-day target
+        # here may only see the previous close. Lag them at merge time (not in
+        # build_features.py) because next-day-target consumers
+        # (Prepare_diffusion_data) legitimately use same-date alignment.
+        vix = vix.sort_values('date').copy()
+        vix['vix_change'] = vix['vix_change'].shift(1)
         df = pd.merge(df, vix[['date', 'vix_change']], on='date', how='left')
 
         # Merge enhancement features if available
@@ -422,6 +442,9 @@ class DataProcessor():
                             'iv_skew', 'vrp_20d', 'futures_basis_pct', 'rv_20d']
             avail_cols = [c for c in enhance_cols if c in enhance.columns]
             if avail_cols:
+                enhance = enhance.sort_values('date').copy()
+                if 'sp500_return' in avail_cols:
+                    enhance['sp500_return'] = enhance['sp500_return'].shift(1)
                 df = pd.merge(df, enhance[['date'] + avail_cols], on='date', how='left')
                 for c in avail_cols:
                     df[c] = df[c].fillna(0.0)
@@ -701,3 +724,95 @@ class DataProcessor():
         test_loader = make_loader(test_mask, shuffle=False)
 
         return train_loader, val_loader, test_loader
+
+    def Prepare_surface_panel(self, train_end_date, n_tau_grid=10, n_logm_grid=20):
+        """Daily gridded total-variance surfaces + market conditions for the
+        flow-matching surface forecaster (Model 5 replacement).
+
+        Differences vs. the deprecated Prepare_diffusion_data:
+        - grid quantiles computed from TRAIN-period rows only (no test leakage)
+        - tau-major layout: surface[i_tau * n_logm + i_logm], via indexing='ij'
+        - VIX joined with forward-fill (no scale-inconsistent 0.2 default)
+        - returns per-day arrays + grid metadata; pairing/splitting is done by
+          flow_surface.build_dataset so normalization stays train-only there
+
+        Returns dict with keys: dates (list of Timestamps), surfaces
+        (N, n_tau*n_logm), conditions (N, 11), tau_grid, logm_grid, cond_names.
+        """
+        from scipy.interpolate import griddata
+
+        print('Preparing surface panel...')
+
+        df = self.prs_dataset.copy()
+        df = df.sort_values(['date', 'tau', 'logm'])
+        df = df.dropna(subset=['tau', 'logm', 'total_var'])
+
+        # Fixed grid from TRAIN-period quantiles only
+        train_df = df[df['date'] <= train_end_date]
+        tau_grid = np.linspace(train_df['tau'].quantile(0.05),
+                               train_df['tau'].quantile(0.95), n_tau_grid)
+        logm_grid = np.linspace(train_df['logm'].quantile(0.05),
+                                train_df['logm'].quantile(0.95), n_logm_grid)
+        tt, ll = np.meshgrid(tau_grid, logm_grid, indexing='ij')  # tau-major
+        grid_points = np.column_stack([tt.ravel(), ll.ravel()])
+
+        daily_surfaces = {}
+        for date, group in df.groupby('date'):
+            points = group[['tau', 'logm']].values
+            values = group['total_var'].values
+            if len(points) < 5:
+                continue
+            try:
+                grid_values = griddata(points, values, grid_points, method='linear')
+                if np.any(np.isnan(grid_values)):
+                    nearest = griddata(points, values, grid_points, method='nearest')
+                    grid_values = np.where(np.isnan(grid_values), nearest, grid_values)
+                daily_surfaces[date] = np.clip(grid_values.astype('float64'), 1e-8, None)
+            except Exception:
+                continue
+
+        sorted_dates = sorted(daily_surfaces.keys())
+
+        # Conditions: VIX level/change (ffilled onto option dates), underlying
+        # return, 5d realized vol, + 7 enhancement features
+        date_index = pd.DataFrame({'date': sorted_dates})
+        vix = self.load_vix_data()
+        if vix is not None:
+            merged = pd.merge_asof(date_index, vix[['date', 'Close', 'vix_change']],
+                                   on='date', direction='backward')
+            vix_level = merged['Close'].ffill().fillna(20.0).values
+            vix_chg = merged['vix_change'].fillna(0.0).values
+        else:
+            vix_level = np.full(len(sorted_dates), 20.0)
+            vix_chg = np.zeros(len(sorted_dates))
+
+        daily_underlying = df.groupby('date')['underlying'].first().reindex(sorted_dates)
+        und_ret = daily_underlying.pct_change().fillna(0.0).values
+        rvol = pd.Series(und_ret).rolling(5).std().fillna(0.01).values
+
+        enhance = self.load_enhancement_features()
+        enhance_cols = ['sp500_return', 'iv_term_slope', 'iv_skew',
+                        'vrp_20d', 'futures_basis_pct', 'rv_20d', 'inst_net_ratio']
+        if enhance is not None:
+            enh = date_index.merge(enhance[['date'] + enhance_cols],
+                                   on='date', how='left')
+            enh_values = enh[enhance_cols].fillna(0.0).values
+        else:
+            enh_values = np.zeros((len(sorted_dates), len(enhance_cols)))
+
+        conditions = np.column_stack([vix_level, vix_chg, und_ret, rvol, enh_values])
+        cond_names = (['vix_level', 'vix_change', 'underlying_return', 'rv_5d']
+                      + enhance_cols)
+
+        surfaces = np.stack([daily_surfaces[d] for d in sorted_dates])
+        print(f'  {len(sorted_dates)} daily surfaces on '
+              f'{n_tau_grid}x{n_logm_grid} tau-major grid')
+
+        return {
+            'dates': sorted_dates,
+            'surfaces': surfaces,
+            'conditions': conditions,
+            'tau_grid': tau_grid,
+            'logm_grid': logm_grid,
+            'cond_names': cond_names,
+        }
