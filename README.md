@@ -97,27 +97,27 @@ The key insight is that the hypernetwork doesn't predict IV directly — it pred
 
 **Results:** Pending retraining with latest codebase.
 
-### 5. DDPM: Diffusion Model for Surface Forecasting
+### 5. Flow Matching: Generative Surface Forecasting
 
-**What it does:** Forecasts *tomorrow's* IV surface based on today's market conditions. While models 1-4 interpolate today's surface from observed prices, this model predicts the future.
+**What it does:** Forecasts *tomorrow's* IV surface based on today's surface and market conditions. While models 1-4 interpolate today's surface from observed prices, this model predicts the future — and produces a full predictive *distribution* (100 scenario samples per day), not just a point forecast.
 
 **Why it matters:** Portfolio managers need to know not just today's prices, but where they're headed. A good surface forecast enables proactive hedging — adjusting positions before the market moves, rather than reacting afterward.
 
-**How it works:** A **Denoising Diffusion Probabilistic Model** (DDPM — the same family of models behind image generators like DALL-E and Stable Diffusion, but applied to financial surfaces instead of images). The process works in reverse:
+**How it works** (this replaced the draft DDPM design — see the decision record in `docs/model45_completion_report.md`):
 
-1. **Training:** Take a real IV surface (a 10x20 grid = 200 numbers), gradually add random noise over 1000 steps until it becomes pure static. Train a neural network to reverse each step — given the noisy version, predict the noise that was added.
+1. **Compress:** Each day's 10x20 surface is log-transformed and compressed to ~12 PCA factor scores (fitted on training data only). Roughly 3 factors explain >90% of IV-surface variation (a classic result), so forecasting 12 smooth factors is far better conditioned than forecasting 200 grid cells from only ~1,450 training days.
 
-2. **Generation:** Start from pure random noise and apply the trained denoiser 1000 times. Each step removes a little noise, gradually revealing a realistic IV surface conditioned on the input market features.
+2. **Generate:** A small **conditional flow-matching** model (the modern successor to diffusion models — same training cost, but sampling takes 50 quick steps instead of 1000) learns the distribution of tomorrow's factor scores given today's scores and 11 market features (VIX level and change, underlying return, realized volatility, S&P 500 return, IV term slope, IV skew, variance risk premium, futures basis, institutional positioning).
 
-The architecture is a **1D U-Net** (encoder-decoder with skip connections). Conditioning on 11 market features (today's surface summary + VIX level, VIX change, underlying return, realized volatility, S&P 500 return, IV term slope, IV skew, variance risk premium, futures basis, institutional positioning) is done via **FiLM layers** (Feature-wise Linear Modulation) — these tell the denoiser "generate a surface that looks like what the market should produce given these conditions."
+3. **Reconstruct:** Sampled factor scores are mapped back through the PCA and exponentiated — so every generated surface is **positive by construction**.
 
-**Key advantage over point prediction:** The diffusion model generates *coherent* surfaces where all 200 grid points are mutually consistent. Point prediction models (Base, HyperIV) predict each point independently, which can create internal inconsistencies.
+**Key advantage over point prediction:** generated surfaces are *coherent* (all 200 grid points mutually consistent) and come with calibrated uncertainty. Honest caveat from the literature: daily IV surfaces are ~99% autocorrelated, so beating the "tomorrow = today" random walk on point accuracy at a 1-day horizon is marginal at best — the model's real value is scenario generation and uncertainty quantification, and it is evaluated against random-walk and VAR baselines with a Diebold-Mariano test to keep that claim honest.
 
-**Results:** Pending retraining with updated condition_dim=11 (vixtwn_change removed).
+**Results:** see `logs/flow_surface_eval.json` and `docs/model45_completion_report.md`.
 
 ## Results Summary
 
-> **Status (2026-02-27):** Model 1 (eSSVI+NN) is trained on `prs_dataset_no_fat(clean)` (2014-2020 train, 2021 test). Model 2 (ICNN Dupire) V1-V3 complete. Model 3 fully finished — 12-way comparison (3 arch × 4 opt) done, TFT+CPR confirmed winner. Models 4, 5 await retraining.
+> **Status (2026-07-06):** All five models trained. Model 1 (eSSVI+NN) on `prs_dataset_no_fat(clean)` (2014-2020 train, 2021 test). Model 2 (ICNN Dupire) V1-V3 complete. Model 3 finished — 12-way comparison, TFT+CPR winner. Model 4 (HyperIV + PIVOT price auxiliary) trained — `logs/hyperiv_results.json`. Model 5 (conditional flow matching over PCA factors, replacing the draft DDPM) trained and evaluated — beats the 1-day random walk on tv-RMSE with Diebold-Mariano p < 0.0001 (`logs/flow_surface_eval.json`). Full decision record: `docs/model45_completion_report.md`.
 
 ### Model 1 (Base eSSVI+NN) — Current
 
@@ -175,8 +175,8 @@ Cautious Weight Decay (CWD) mitigated overfitting better than standard AdamW for
 | Model | Task | Status |
 |-------|------|--------|
 | ICNN Dupire | Local vol extraction | Implemented (V1-V3) |
-| HyperIV | Point prediction (SOTA) | Needs retraining |
-| DDPM | Surface forecasting | Needs retraining (condition_dim=11) |
+| HyperIV | Point prediction (SOTA, + PIVOT price aux) | Trained — see `logs/hyperiv_results.json` |
+| Flow matching (replaced DDPM) | Surface forecasting | Trained — see `logs/flow_surface_eval.json` |
 
 ### Model 1 (eSSVI+NN) Training Details
 
@@ -267,10 +267,13 @@ src/
   dataset.py            # Data loading, feature engineering, train/test splits
   test.py               # Evaluation with arbitrage violation checks
   structural_break.py   # CUSUM/Bai-Perron change-point detection
-  hyperiv.py            # HyperIV hypernetwork model
+  hyperiv.py            # HyperIV hypernetwork model (+ PIVOT price auxiliary)
   train_hyperiv.py      # HyperIV training
-  diffusion.py          # DDPM (UNet1D, noise schedule, sampler)
-  train_diffusion.py    # DDPM training
+  flow_surface.py       # Model 5: PCA factors + conditional flow matching
+  train_flow_surface.py # Model 5 training
+  evaluate_surface_forecast.py  # Model 5 evaluation (baselines, DM test, CRPS)
+  diffusion.py          # DEPRECATED: draft DDPM (superseded by flow_surface.py)
+  train_diffusion.py    # DEPRECATED: draft DDPM training
   transfer.py           # Transfer learning utilities (weight loading, differential LR)
 scripts/
   download_data.py      # Download TXO data from FinMind API + TWII/VIX from yfinance
@@ -341,10 +344,11 @@ python extract_features.py --model_path ../models/DupireModel.pt --use_icnn
 cd ../model3_research
 python scripts/train_models.py --model tft
 
-# Phase 4 & 5: Train HyperIV and DDPM
+# Phase 4 & 5: Train HyperIV and the flow-matching forecaster
 cd ../src
 python train_hyperiv.py --on_gpu --epochs 500
-python train_diffusion.py --on_gpu --epochs 1000
+python train_flow_surface.py --on_gpu
+python evaluate_surface_forecast.py
 
 # Evaluate base model on test set
 python test.py --on_gpu
@@ -366,9 +370,6 @@ python train.py --on_gpu --finetune ../model1_research/models/MultiModel.pt
 
 # Fine-tune HyperIV from existing weights
 python train_hyperiv.py --on_gpu --finetune ../models/HyperIVModel.pt
-
-# Fine-tune DDPM from existing weights
-python train_diffusion.py --on_gpu --finetune ../models/DiffusionModel.pt
 ```
 
 Transfer learning uses **differential learning rates**: pretrained layers learn at 1/10th the normal rate (to preserve useful knowledge), while newly initialized layers learn at full speed (to quickly adapt to new features). This is especially important for the Adjustment and DDPM models, where the input dimension changed (new enhancement features were added).

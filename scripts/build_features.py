@@ -6,7 +6,11 @@ the DDPM and Adjustment model pipelines.
 
 Features:
     External (downloaded):
-        - sp500_return: S&P 500 overnight return (US close -> Taiwan open)
+        - sp500_return: S&P 500 close-to-close return, dated at the US close.
+          The US close on date t is realized ~15h AFTER Taiwan's close on the
+          same calendar date, so same-day-target consumers must lag it one
+          Taiwan trading day (see dataset.py prepare_adjustment_data);
+          next-day-target consumers (Model 5 conditioning) use it as-is.
         - us10y_yield: US 10-Year Treasury yield (risk-free rate proxy)
         - usdtwd: USD/TWD exchange rate
         - futures_basis: TAIEX futures close - spot close (basis points)
@@ -72,6 +76,7 @@ def download_external_data(start='2014-01-01'):
         sp = sp[['Close']].reset_index()
         sp.columns = ['date', 'sp500_close']
         sp['date'] = pd.to_datetime(sp['date']).dt.tz_localize(None)
+        # Dated at the US close: same-calendar-date Taiwan targets must lag this.
         sp['sp500_return'] = sp['sp500_close'].pct_change()
         frames['sp500'] = sp[['date', 'sp500_close', 'sp500_return']]
         print(f'    {len(sp)} rows')

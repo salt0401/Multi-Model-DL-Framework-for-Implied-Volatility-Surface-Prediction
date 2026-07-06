@@ -370,71 +370,72 @@ Three architectures were evaluated (2026-02-21). All share the same input/output
 
 **Key insight:** The hypernetwork generates *different* weights for each surface in the batch. This means every day gets a specialized predictor rather than sharing a single model.
 
+**2026-07-06 upgrades** (decision record: `docs/model45_completion_report.md`):
+- **Residual hypernetwork:** generated params = learnable normally-initialized base + day-specific delta (pure-delta weights start at 0, where tanh activations and their gradients die).
+- **Scale-equivariant output:** the target MLP (tanh hidden, softplus head) predicts the O(1) ratio `w / sqrt(yATM^2 + 0.002^2)` — predicting raw total variance (median ~0.005) through softplus saturates the head and collapses training to predicting zero.
+- **Corrected Gatheral-Jacquier butterfly density** (the draft dropped the square on w'), input standardization from train stats, masked losses, seeded random eval references (draft always used the 50 shortest-maturity options), float32 training.
+- **PIVOT price-space auxiliary loss** (arXiv 2606.17065): normalized Black-76 price MSE, weight 0.1 — the one substantial published upgrade to HyperIV (ICML 2025), which remains SOTA for sparse-quote surface construction per a July 2026 literature review.
+
 #### Configuration
 
 | Parameter | Value |
 |-----------|-------|
-| Architecture | Transformer set encoder (128-dim, 4 heads, 2 layers) + Hypernetwork MLP |
-| Target MLP | 64-32 hidden dims |
+| Architecture | Transformer set encoder (128-dim, 4 heads, 2 layers) + residual hypernetwork |
+| Target MLP | 64-32 hidden dims, tanh + softplus, yATM-ratio output |
 | Reference points | 50 per surface |
-| Learning rate | 0.001 |
+| Loss weights | mse 1.0, calendar 10, butterfly 10, price 0.1 |
+| Learning rate | 0.001 (AdamW, cosine), float32 |
 | Batch size | 32 (per-surface) |
-| Max epochs | 500 |
+| Max epochs | 500 (early stop patience 50) |
 
-> **Results: Pending retraining.** Previous results were based on an older Model 1 and dataset configuration.
+> **Results:** see `logs/hyperiv_results.json` and `docs/model45_completion_report.md`.
 
-### Phase 5: DDPM
+### Phase 5: Conditional Flow Matching over Surface Factors
+
+> **Design replaced (2026-07-06).** The draft grid-space DDPM (`src/diffusion.py`,
+> `src/train_diffusion.py`) is **deprecated** — kept for reference only. At
+> ~1,450 training pairs a 200-dim grid generative model is data-starved (the
+> closest published success, arXiv 2511.07571, used ~7,000 surfaces), the
+> draft also lacked surface normalization (signal ~1% of the injected noise),
+> and 1000-step ancestral sampling cost ~2.2 s/surface on the target GPU.
+> Full decision record: `docs/model45_completion_report.md`.
 
 ```
-   Current surface + noise          Market conditions
-   x_t (batch, 1, 200)             (batch, 11)
-         |                              |
-   1D U-Net                        FiLM conditioning
-   Encoder:                        (gamma * feature + beta)
-     Conv1d(1, 64, k=3)               |
-     + FiLM + ResBlock                 |
-     Conv1d(64, 128, k=3, s=2)        |
-     + FiLM + ResBlock                 |
-     Conv1d(128, 256, k=3, s=2)       |
-     + FiLM + ResBlock                 |
-   Bottleneck:                         |
-     Conv1d(256, 256)                  |
-   Decoder:                            |
-     ConvT(256, 128, s=2)             |
-     + FiLM + ResBlock + skip          |
-     ConvT(128, 64, s=2)              |
-     + FiLM + ResBlock + skip          |
-     Conv1d(64, 1, k=1)               |
-         |                              |
-   epsilon_theta                  Sinusoidal time embedding
-   (predicted noise)              t -> (embed_dim,)
-         |                              |
-         +--------- condition ----------+
-                    |
-              x_{t-1} = denoise(x_t, epsilon_theta, t)
-              (repeat 1000 steps for generation)
+   Today's 10x20 surface (200-dim, tau-major)
+         |
+   log(total variance)
+         |
+   PCA (12 factors, TRAIN-fit, ~97% EV; truncation floor 0.0011 << RW error 0.0019)
+         |
+   z-scored factor scores z_today (12)     Market conditions (11, z-scored)
+         \_______________  _______________/
+                         \/
+              condition c = [z_today, market] (23)
+                          |
+   Conditional OT flow matching:  t~U(0,1), z_t=(1-t)z0+t*z1, target v = z1-z0
+   VelocityMLP v(z_t, t, c): FiLM residual MLP (256 hidden, 3 blocks, ~0.9M params)
+                          |
+   Sampling: Euler dz = v dt, 50 steps, z0 ~ N(0,I)   (30-100x fewer steps than DDPM)
+                          |
+   inverse: de-z-score -> PCA reconstruct -> exp  => POSITIVE surface by construction
 ```
 
-**Noise schedule:** Cosine schedule (`beta_t = 1 - alpha_bar_t / alpha_bar_{t-1}`), 1000 timesteps.
+**Condition features (11 dims):** Base 4 (VIX level ffilled, VIX change, underlying return, realized vol 5d) + 7 enhancement features (S&P 500 return, IV term slope, IV skew, VRP, futures basis, realized vol 20d, institutional net ratio).
 
-**FiLM conditioning:** Each U-Net block receives `condition = time_embed + market_features` and applies Feature-wise Linear Modulation: `gamma * x + beta` where gamma and beta are projected from the condition vector.
+**Anti-memorization (n≈1,450):** dropout 0.1, weight decay 1e-3, EMA 0.999, early stopping on sampled val tv-RMSE.
 
-**Condition features (11 dims):** Base 4 (VIX level, VIX change, underlying return, realized vol) + 7 enhancement features (S&P 500 return, IV term slope, IV skew, VRP, futures basis, realized vol 20d, institutional net ratio).
+**Evaluation protocol** (`src/evaluate_surface_forecast.py`): tv-RMSE / IV-RMSE / IV-MAPE against random walk and VAR(1)-on-factors baselines, Diebold-Mariano test, CRPS (100 samples), 90% interval coverage, calendar/butterfly violation rates (with the actual market surfaces as the empirical reference). Literature expectation: daily surfaces are ~0.99 autocorrelated, so beating the random walk at 1-day horizon is marginal at best — the model's value-add is calibrated distributions and coherent scenarios.
 
-#### Configuration
+#### Configuration (`[flow_surface]` in config.ini)
 
 | Parameter | Value |
 |-----------|-------|
-| Architecture | 1D U-Net (64-128-256 channels) |
-| Surface grid | 10 tau x 20 log-moneyness = 200-dim vector |
-| Diffusion steps | 1000 |
-| Noise schedule | Cosine |
-| Condition dim | 11 (vixtwn_change removed, was 13) |
-| Learning rate | 0.0002 |
-| Batch size | 16 |
-| Epochs | 1000 |
-
-> **Results: Pending retraining.** Previous results used an older dataset configuration with `vixtwn_change` feature (condition_dim was 13, now 11). Data quality issues in 2022-2026 data must be resolved first.
+| Representation | PCA (<=12 comps) of log total variance, train-fit |
+| Velocity net | Residual MLP, 256 hidden, 3 blocks, FiLM conditioning |
+| Sampling | Euler, 50 steps |
+| Learning rate / batch | 0.001 / 128 |
+| Weight decay / dropout / EMA | 1e-3 / 0.1 / 0.999 |
+| Epochs | 3000 max, early stop patience 40 validations |
 
 ## Transfer Learning (`transfer.py`)
 
@@ -516,9 +517,9 @@ test_train_integration.py  10 tests   End-to-end training loops
 | Base (eSSVI+NN) | **Current** | Val loss 0.07495 (84 ep, early-stopped), SSVI healthy | prs_dataset_no_fat(clean), 2014-2020, ε=0.02 |
 | Adjustment (TFT+CPR) | **12-way winner** | Test RMSE 0.1558, MAPE 9.51% | 318K params, **#1 of 12**, excellent interpretability |
 | Adjustment (11 others) | **Completed** | RMSE 0.1590–0.1765 | All archived, see `model3_research/README.md` |
-| HyperIV | Pending retrain | — | Independent model |
-| ICNN Dupire | **V1 in development** | — | ICNN local vol extractor |
-| DDPM | Pending retrain | — | condition_dim=11 |
+| HyperIV | **Trained (2026-07-06)** | Test tv-RMSE 0.00215, MAPE 6.94%, butterfly viol. 0.055% | Independent model, PIVOT price aux |
+| ICNN Dupire | **V1-V3 complete** | 0% butterfly violations | ICNN local vol extractor |
+| Flow matching (replaced DDPM) | **Trained (2026-07-06)** | Test tv-RMSE 0.00171 vs RW 0.00192 (DM p<1e-4) | PCA factors + conditional OT-FM over daily increments |
 
 ### Known Issues
 
@@ -540,10 +541,13 @@ test_train_integration.py  10 tests   End-to-end training loops
 | `model2_research/train_dupire.py` | Dupire PINN training script |
 | `model2_research/module_d.py` | V3 Greeks Extractor (Vanna, Volga, LV Grad) |
 | `model2_research/extract_features.py` | V3 downstream feature extraction script |
-| `src/hyperiv.py` | HyperIV (Transformer + Hypernetwork) |
+| `src/hyperiv.py` | HyperIV (Transformer + residual hypernetwork, PIVOT price aux) |
 | `src/train_hyperiv.py` | HyperIV training script |
-| `src/diffusion.py` | DDPM (1D U-Net + FiLM conditioning) |
-| `src/train_diffusion.py` | DDPM training script |
+| `src/flow_surface.py` | Model 5: PCA factor preprocessing + conditional flow matching |
+| `src/train_flow_surface.py` | Model 5 training script |
+| `src/evaluate_surface_forecast.py` | Model 5 evaluation (RW/VAR baselines, DM, CRPS, violations) |
+| `src/diffusion.py` | DEPRECATED: draft DDPM (superseded by flow_surface.py) |
+| `src/train_diffusion.py` | DEPRECATED: draft DDPM training script |
 | `src/transfer.py` | Transfer learning utilities |
 | `src/structural_break.py` | Change-point detection (PELT algorithm) |
 | `src/utils.py` | Config loading, metrics, early stopping, seed |
@@ -576,8 +580,8 @@ test_train_integration.py  10 tests   End-to-end training loops
 | Model 1 (eSSVI+NN) | ✅ Trained (2014-2020 / 2021 test) | Future: retrain on full dataset after data quality fixes |
 | Model 2 (ICNN Dupire) | ✅ Implemented (V1-V3) | Local volatility and higher-order Greeks safely extracted |
 | Model 3 (Adjustment) | ✅ Arch comparison & regularization done | 3 shortlisted models (TFT+CPR, TFT+AdamW, GRU+CWD) retained. Integration pending |
-| Model 4 (HyperIV) | ⏳ Pending retraining | Retrain after Model 1 is stable |
-| Model 5 (DDPM) | ⏳ Pending retraining | Retrain after data quality issues resolved |
+| Model 4 (HyperIV) | ✅ Trained (2026-07-06): test tv-RMSE 0.00215, 0.000%/0.055% cal/butterfly violations | Results: `logs/hyperiv_results.json` |
+| Model 5 (Flow matching, replaced DDPM) | ✅ Trained & evaluated (2026-07-06): beats 1-day random walk, DM p<1e-4 | Results: `logs/flow_surface_eval.json` |
 
 ## Changelog
 
@@ -587,10 +591,11 @@ test_train_integration.py  10 tests   End-to-end training loops
 - Data leakage fix: chronological split + KDE train-only fitting
 - Model 3 architecture comparison & regularization: TFT + CPR selected as primary choice. Non-shortlisted experiments archived.
 - Model 2 ICNN redesign complete: Soft PINN (V1) → ICNN (V2) → Greek Extractor Module D (V3). Butterfly violations permanently eliminated.
+- 2026-07-06: Models 4 & 5 completed. HyperIV fixed (corrected Gatheral butterfly density — the draft and `src/test.py` both dropped the square on w'; tanh/softplus target net; residual hypernetwork; yATM-ratio output; PIVOT price auxiliary) and trained. Draft DDPM replaced with conditional flow matching over train-fit PCA factors of log total variance (`src/flow_surface.py`); full evaluation protocol vs random walk / VAR(1) with DM test, CRPS, coverage, and arbitrage-violation rates. getYATM leakage guard wired to config; surface-grid stats made train-only. Details: `docs/model45_completion_report.md`.
 
 ## Future Work
 
-- Integrate HyperIV predictions as DDPM conditioning for improved surface forecasting
+- Integrate HyperIV predictions as flow-matching conditioning for improved surface forecasting
 - Add explicit no-arbitrage constraints to HyperIV via penalty or projection
 - Explore attention-based architectures for the base model (replace per-expiration SmileModels with a single cross-expiration model)
 - Extend to American-style options using the DGM PDE framework with early exercise boundary
