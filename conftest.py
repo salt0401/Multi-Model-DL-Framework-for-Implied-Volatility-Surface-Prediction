@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader
 
 # Allow bare imports from src/
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 
 @pytest.fixture(scope='session', autouse=True)

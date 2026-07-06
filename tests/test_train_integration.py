@@ -5,7 +5,7 @@ from torch import optim
 from torch.utils.data import TensorDataset, DataLoader
 
 from model1_research.model import MultiModel, WeightedSumLoss
-from train import train_one_epoch, validate
+from model1_research.train import train_one_epoch, validate
 
 
 def _make_loaders():
