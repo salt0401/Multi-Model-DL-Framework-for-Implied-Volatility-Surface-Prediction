@@ -62,7 +62,8 @@ def check_butterfly_arbitrage(tv_pred, logm, tau):
             if dk1 > 0 and dk2 > 0:
                 d2w = 2 * ((w[i+1] - w[i])/dk2 - (w[i] - w[i-1])/dk1) / (dk1 + dk2)
                 dw = (w[i+1] - w[i-1]) / (dk1 + dk2)
-                g = (1 - k[i]*dw/(2*w[i]))**2 - dw/4*(1/w[i] + 0.25) + d2w/2
+                # Gatheral-Jacquier density: note the SQUARED dw term
+                g = (1 - k[i]*dw/(2*w[i]))**2 - dw**2/4*(1/w[i] + 0.25) + d2w/2
                 total += 1
                 if g < 0:
                     violations += 1

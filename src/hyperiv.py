@@ -57,6 +57,11 @@ class TargetNetwork(nn.Module):
 
     Weights are NOT learned directly — they are set externally by the hypernetwork.
     This class defines the architecture (shapes) only.
+
+    Activations are smooth (tanh) so second derivatives w.r.t. inputs are
+    nonzero (a ReLU net is piecewise-linear: d2w/dk2 = 0 a.e., which would
+    silently disable the butterfly penalty). The softplus head guarantees
+    positive total variance, matching the HyperIV paper's tanh/softplus design.
     """
 
     def __init__(self, hidden_dims=(64, 32)):
@@ -65,9 +70,10 @@ class TargetNetwork(nn.Module):
         in_dim = 3  # tau, logm, yATM
         for h in hidden_dims:
             layers.append(nn.Linear(in_dim, h))
-            layers.append(nn.ReLU())
+            layers.append(nn.Tanh())
             in_dim = h
         layers.append(nn.Linear(in_dim, 1))
+        layers.append(nn.Softplus())
         self.net = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -126,13 +132,43 @@ class HyperIVModel(nn.Module):
         # Target network (used as a template for functional_call)
         self.target_net = TargetNetwork(hidden_dims=target_hidden_dims)
 
-        # Hypernetwork: project embedding to all target params
+        # Hypernetwork: project embedding to a DELTA on a learnable base
+        # parameter vector (residual hypernetwork). With deltas alone, the
+        # generated weights start near zero, hidden activations are tanh(0)=0,
+        # gradients to the generated weights vanish and training plateaus on
+        # flat surfaces (which incur zero arbitrage penalty).
         n_target_params = _count_target_params(target_hidden_dims)
         self.hyper_proj = nn.Linear(embed_dim, n_target_params)
-
-        # Initialize hyper_proj with small weights for stability
         nn.init.normal_(self.hyper_proj.weight, std=0.01)
         nn.init.zeros_(self.hyper_proj.bias)
+
+        # Base = a normally-initialized target MLP, flattened in the exact
+        # layout _generate_target_params expects ([W1,b1,W2,b2,...]).
+        base_chunks = []
+        for layer in self.target_net.net:
+            if isinstance(layer, nn.Linear):
+                base_chunks.append(layer.weight.detach().flatten())
+                base_chunks.append(layer.bias.detach().flatten())
+        base_flat = torch.cat(base_chunks)
+        # The target net predicts the RATIO w / yATM_tilde (see forward).
+        # softplus(0.54) ~= 1.0, so initial surfaces start at the ATM level.
+        # Predicting raw total variance (median ~0.005) through softplus is
+        # fatally ill-conditioned: pre-activations sit at log(tv) ~= -5..-9
+        # where softplus' gradient ~= tv ~= 1e-6 kills all upstream gradients
+        # and the model collapses to predicting zero.
+        base_flat[-1] = 0.54
+        self.base_params = nn.Parameter(base_flat)
+
+        # Feature standardization stats for (tau, logm, total_var/yATM);
+        # identity by default so the model works without set_normalization.
+        self.register_buffer('feat_mean', torch.zeros(3))
+        self.register_buffer('feat_std', torch.ones(3))
+
+    def set_normalization(self, mean, std):
+        """Set input standardization stats (3-dim: tau, logm, tv/yATM),
+        computed from TRAINING data only."""
+        self.feat_mean.copy_(mean.to(self.feat_mean))
+        self.feat_std.copy_(std.to(self.feat_std).clamp(min=1e-8))
 
     def forward(self, ref_set, target_tau, target_logm, target_yATM, ref_mask=None):
         """
@@ -152,16 +188,22 @@ class HyperIVModel(nn.Module):
         batch_size = ref_set.shape[0]
         n_target = target_tau.shape[1]
 
-        # 1. Encode reference set
-        embedding = self.set_encoder(ref_set, mask=ref_mask)  # (batch, embed_dim)
+        # 1. Encode reference set (standardized with train-set stats)
+        ref_norm = (ref_set - self.feat_mean) / self.feat_std
+        embedding = self.set_encoder(ref_norm, mask=ref_mask)  # (batch, embed_dim)
 
-        # 2. Generate target network parameters
-        flat_params = self.hyper_proj(embedding)  # (batch, n_target_params)
+        # 2. Generate target network parameters (base + day-specific delta)
+        flat_params = self.base_params + self.hyper_proj(embedding)  # (batch, n_target_params)
 
-        # 3. Build target inputs with grad tracking
+        # 3. Build target inputs with grad tracking. Gradients are taken w.r.t.
+        # the ORIGINAL (unnormalized) tau/logm; the affine standardization is
+        # part of the autograd graph, so dw/dtau etc. come out in raw units.
         target_tau = target_tau.detach().requires_grad_(True)
         target_logm = target_logm.detach().requires_grad_(True)
-        target_input = torch.cat([target_tau, target_logm, target_yATM], dim=-1)  # (batch, n_target, 3)
+        tau_n = (target_tau - self.feat_mean[0]) / self.feat_std[0]
+        logm_n = (target_logm - self.feat_mean[1]) / self.feat_std[1]
+        yatm_n = (target_yATM - self.feat_mean[2]) / self.feat_std[2]
+        target_input = torch.cat([tau_n, logm_n, yatm_n], dim=-1)  # (batch, n_target, 3)
 
         # 4. Apply generated weights per batch element
         all_preds = []
@@ -170,7 +212,15 @@ class HyperIVModel(nn.Module):
             pred_i = torch.func.functional_call(self.target_net, params, target_input[i])
             all_preds.append(pred_i)
 
-        tv_pred = torch.stack(all_preds, dim=0)  # (batch, n_target, 1)
+        tv_pred_ratio = torch.stack(all_preds, dim=0)  # (batch, n_target, 1)
+
+        # Scale-equivariant output (Model 1's Lesson #7): the target net
+        # predicts w / yATM_tilde, a well-conditioned O(1) ratio (~1 at the
+        # money), instead of raw total variance whose 1e-5..1e-1 range
+        # saturates the softplus head. eps floors the multiplier so gradients
+        # survive near-zero yATM days.
+        yatm_tilde = torch.sqrt(target_yATM ** 2 + 0.002 ** 2)
+        tv_pred = yatm_tilde * tv_pred_ratio
 
         # 5. Compute analytical gradients via autograd
         total_output = tv_pred.sum()
@@ -186,33 +236,75 @@ class HyperIVModel(nn.Module):
         return tv_pred, grad_tau, grad_logm, grad_logm2
 
 
-class HyperIVLoss(nn.Module):
-    """Loss for HyperIV: MSE + physics-informed constraints.
+def black76_call_price(logm, w):
+    """Normalized Black-76 call price (forward = 1, discount = 1).
 
-    Same constraints as WeightedSumLoss but adapted for HyperIV interface.
+    C(k, w) = N(d1) - e^k N(d2),  d1 = (-k + w/2) / sqrt(w),  d2 = d1 - sqrt(w)
+    where k is log-moneyness and w total implied variance.
+    """
+    w = w.clamp(min=1e-10)
+    sqrt_w = torch.sqrt(w)
+    d1 = (-logm + w / 2) / sqrt_w
+    d2 = d1 - sqrt_w
+    normal = torch.distributions.Normal(
+        torch.zeros((), dtype=logm.dtype, device=logm.device),
+        torch.ones((), dtype=logm.dtype, device=logm.device))
+    return normal.cdf(d1) - torch.exp(logm) * normal.cdf(d2)
+
+
+class HyperIVLoss(nn.Module):
+    """Loss for HyperIV: MSE + physics-informed constraints + price auxiliary.
+
+    Butterfly uses the Gatheral & Jacquier (2014) density condition (note the
+    squared w' term, matching model1_research Loss_butterfly). The price
+    auxiliary follows PIVOT (arXiv 2606.17065): MSE between normalized
+    Black-76 prices implied by predicted vs. true total variance.
     """
 
-    def __init__(self, w_mse=1.0, w_calendar=10.0, w_butterfly=10.0):
+    def __init__(self, w_mse=1.0, w_calendar=10.0, w_butterfly=10.0, w_price=0.1):
         super().__init__()
         self.w_mse = w_mse
         self.w_calendar = w_calendar
         self.w_butterfly = w_butterfly
+        self.w_price = w_price
 
-    def forward(self, tv_pred, tv_true, logm, grad_tau, grad_logm, grad_logm2):
+    @staticmethod
+    def _masked_mean(x, valid_mask):
+        if valid_mask is None:
+            return x.mean()
+        m = valid_mask.unsqueeze(-1).to(x.dtype)
+        return (x * m).sum() / m.sum().clamp(min=1)
+
+    def forward(self, tv_pred, tv_true, logm, grad_tau, grad_logm, grad_logm2,
+                valid_mask=None):
         """
-        All inputs: (batch, n_target, 1)
+        All tensor inputs: (batch, n_target, 1).
+        valid_mask: optional (batch, n_target) bool, True where entries are real
+        (not padding). Reductions divide by the valid count only.
         """
         # MSE on total variance
-        mse_loss = torch.mean((tv_pred - tv_true) ** 2)
+        mse_loss = self._masked_mean((tv_pred - tv_true) ** 2, valid_mask)
 
         # Calendar arbitrage: dw/dtau >= 0
-        calendar_loss = torch.mean(torch.relu(-grad_tau))
+        calendar_loss = self._masked_mean(torch.relu(-grad_tau), valid_mask)
 
-        # Butterfly arbitrage: density g(k) >= 0
-        g_k = (1 - (logm * grad_logm) / (2 * tv_pred.clamp(min=1e-8))) ** 2 \
-              - grad_logm / 4 * (1 / tv_pred.clamp(min=1e-8) + 0.25) \
+        # Butterfly arbitrage: density g(k) >= 0 (Gatheral-Jacquier 2014).
+        # The 1/w factors are clamped at 1e-3 FOR THE TRAINING PENALTY ONLY:
+        # at short maturities w ~ 3e-5, so unclamped 1/w amplifies penalty
+        # gradients x33,000 — a single such batch was measured to throw the
+        # model into the saturated-softplus collapse basin. Evaluation-time
+        # violation rates use the exact formula (train_hyperiv.py).
+        w_safe = tv_pred.clamp(min=1e-3)
+        g_k = (1 - (logm * grad_logm) / (2 * w_safe)) ** 2 \
+              - grad_logm ** 2 / 4 * (1 / w_safe + 0.25) \
               + grad_logm2 / 2
-        butterfly_loss = torch.mean(torch.relu(-g_k))
+        butterfly_loss = self._masked_mean(torch.relu(-g_k), valid_mask)
 
-        total = self.w_mse * mse_loss + self.w_calendar * calendar_loss + self.w_butterfly * butterfly_loss
-        return total, mse_loss, calendar_loss, butterfly_loss
+        # PIVOT price-space auxiliary
+        price_err = (black76_call_price(logm, tv_pred)
+                     - black76_call_price(logm, tv_true)) ** 2
+        price_loss = self._masked_mean(price_err, valid_mask)
+
+        total = (self.w_mse * mse_loss + self.w_calendar * calendar_loss
+                 + self.w_butterfly * butterfly_loss + self.w_price * price_loss)
+        return total, mse_loss, calendar_loss, butterfly_loss, price_loss

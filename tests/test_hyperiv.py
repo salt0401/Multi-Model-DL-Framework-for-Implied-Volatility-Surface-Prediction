@@ -136,6 +136,82 @@ class TestHyperIVModel:
         # At least some gradient should be nonzero
         assert g_tau.abs().sum() > 0 or g_logm.abs().sum() > 0
 
+    def test_second_derivative_nonzero(self, tiny_hyperiv):
+        """Smooth (tanh) target net must yield nonzero d2w/dk2 for the
+        butterfly penalty to be meaningful (ReLU nets give 0 a.e.)."""
+        torch.manual_seed(3)
+        batch, n_ref, n_target = 2, 8, 12
+        ref_set = torch.rand(batch, n_ref, 3) * 0.1
+        tau = torch.rand(batch, n_target, 1)
+        logm = torch.randn(batch, n_target, 1) * 0.2
+        yATM = torch.rand(batch, n_target, 1) * 0.05
+        _, _, _, g_logm2 = tiny_hyperiv(ref_set, tau, logm, yATM)
+        assert g_logm2.abs().sum() > 0
+
+    def test_positive_output(self, tiny_hyperiv):
+        """Softplus head guarantees total variance > 0."""
+        torch.manual_seed(4)
+        tv, _, _, _ = tiny_hyperiv(
+            torch.rand(2, 8, 3) * 0.1, torch.rand(2, 5, 1),
+            torch.randn(2, 5, 1) * 0.2, torch.rand(2, 5, 1) * 0.05)
+        assert (tv > 0).all()
+
+    def test_initial_predictions_at_data_scale(self):
+        """hyper_proj bias init keeps initial surfaces near tv scale (~0.01),
+        not softplus(0) ~ 0.69."""
+        torch.manual_seed(5)
+        m = HyperIVModel(embed_dim=16, n_heads=4, n_transformer_layers=1,
+                         target_hidden_dims=(8, 4))
+        tv, _, _, _ = m(torch.rand(2, 10, 3) * 0.05, torch.rand(2, 5, 1),
+                        torch.randn(2, 5, 1) * 0.1, torch.rand(2, 5, 1) * 0.05)
+        assert tv.median() < 0.2
+
+    def test_learns_at_realistic_tv_scale(self):
+        """Regression: raw-softplus head collapsed to predicting 0 at real tv
+        scale (median ~0.005) because the saturated tail kills gradients.
+        With the yATM-ratio output the model must beat the predict-zero bar
+        after brief training."""
+        torch.manual_seed(7)
+        m = HyperIVModel(embed_dim=16, n_heads=4, n_transformer_layers=1,
+                         target_hidden_dims=(8, 4))
+        loss_fn = HyperIVLoss()
+        opt = torch.optim.AdamW(m.parameters(), lr=1e-3)
+
+        def make(B=8, N=30):
+            tau = torch.rand(B, N, 1) * 0.5 + 0.02
+            logm = torch.randn(B, N, 1) * 0.15
+            yatm = torch.rand(B, N, 1) * 0.008 + 0.001   # realistic tiny scale
+            tv = yatm * (1 + 2.0 * logm ** 2 / torch.sqrt(tau))
+            ref = torch.cat([tau[:, :15], logm[:, :15], tv[:, :15]], dim=-1)
+            return ref, tau, logm, yatm, tv
+
+        zero_bar = None
+        for i in range(100):
+            ref, tau, logm, yatm, tv = make()
+            if zero_bar is None:
+                zero_bar = (tv ** 2).mean().item()
+            tvp, gt, gl, gl2 = m(ref, tau, logm, yatm)
+            total, mse, *_ = loss_fn(tvp, tv, logm, gt, gl, gl2)
+            opt.zero_grad()
+            total.backward()
+            opt.step()
+        assert mse.item() < 0.25 * zero_bar, \
+            f'mse {mse.item():.2e} did not beat predict-zero bar {zero_bar:.2e}'
+
+    def test_normalization_buffers(self):
+        m = HyperIVModel(embed_dim=16, n_heads=4, n_transformer_layers=1,
+                         target_hidden_dims=(8, 4))
+        m.set_normalization(torch.tensor([0.3, 0.0, 0.02]),
+                            torch.tensor([0.2, 0.15, 0.01]))
+        out = m(torch.rand(2, 10, 3) * 0.05, torch.rand(2, 5, 1) * 0.5,
+                torch.randn(2, 5, 1) * 0.1, torch.rand(2, 5, 1) * 0.05)
+        assert all(torch.isfinite(o).all() for o in out)
+        # buffers persist through state_dict round-trip
+        m2 = HyperIVModel(embed_dim=16, n_heads=4, n_transformer_layers=1,
+                          target_hidden_dims=(8, 4))
+        m2.load_state_dict(m.state_dict())
+        assert torch.allclose(m2.feat_std, torch.tensor([0.2, 0.15, 0.01]))
+
 
 # ── HyperIVLoss ──────────────────────────────────────────────────────
 
@@ -149,22 +225,68 @@ class TestHyperIVLoss:
         grad_logm2 = torch.randn(batch, n_target, 1)
         return tv_pred, tv_true, logm, grad_tau, grad_logm, grad_logm2
 
-    def test_returns_4_tuple(self):
+    def test_returns_5_tuple(self):
         loss_fn = HyperIVLoss()
         args = self._make_args()
         result = loss_fn(*args)
         assert isinstance(result, tuple)
-        assert len(result) == 4
+        assert len(result) == 5
 
     def test_total_is_weighted_sum(self):
-        loss_fn = HyperIVLoss(w_mse=1.0, w_calendar=0.0, w_butterfly=0.0)
+        loss_fn = HyperIVLoss(w_mse=1.0, w_calendar=0.0, w_butterfly=0.0, w_price=0.0)
         args = self._make_args()
-        total, mse, cal, but = loss_fn(*args)
+        total, mse, cal, but, price = loss_fn(*args)
         assert torch.allclose(total, mse, atol=1e-8)
 
     def test_gradient_flows(self):
         loss_fn = HyperIVLoss()
         args = self._make_args()
-        total, _, _, _ = loss_fn(*args)
+        total, _, _, _, _ = loss_fn(*args)
         total.backward()
         assert args[0].grad is not None
+
+    def test_butterfly_matches_model1_reference(self):
+        """g(k) must equal model1_research Loss_butterfly (w' SQUARED term)."""
+        from model1_research.model import Loss_butterfly
+        torch.manual_seed(0)
+        w = torch.rand(20, 1) * 0.05 + 0.01
+        k = torch.randn(20, 1) * 0.3
+        g1 = torch.rand(20, 1) * 0.1 - 0.05
+        g2 = torch.rand(20, 1) * 0.1 - 0.05
+        ref = Loss_butterfly()(w, k, g1, g2)
+        loss_fn = HyperIVLoss(w_price=0.0)
+        _, _, _, but, _ = loss_fn(
+            w.unsqueeze(0), w.unsqueeze(0), k.unsqueeze(0),
+            torch.zeros(20, 1).unsqueeze(0), g1.unsqueeze(0), g2.unsqueeze(0))
+        assert torch.allclose(but, ref, atol=1e-10)
+
+    def test_price_aux_matches_scipy(self):
+        """Black-76 normalized call: C = N(d1) - e^k N(d2)."""
+        from scipy.stats import norm as scipy_norm
+        import numpy as np
+        from hyperiv import black76_call_price
+        k, w = 0.05, 0.04
+        d1 = (-k + w / 2) / np.sqrt(w)
+        d2 = d1 - np.sqrt(w)
+        expected = scipy_norm.cdf(d1) - np.exp(k) * scipy_norm.cdf(d2)
+        got = black76_call_price(torch.tensor([[k]], dtype=torch.float64),
+                                 torch.tensor([[w]], dtype=torch.float64))
+        assert abs(got.item() - expected) < 1e-8
+
+    def test_masked_loss_ignores_padding(self):
+        """Loss with padded entries + valid_mask == loss on the unpadded slice."""
+        torch.manual_seed(1)
+        B, N = 2, 6
+        tv_pred = torch.rand(B, N, 1) * 0.05 + 0.01
+        tv_true = torch.rand(B, N, 1) * 0.05 + 0.01
+        k = torch.randn(B, N, 1) * 0.2
+        gt = torch.randn(B, N, 1) * 0.05
+        g1 = torch.randn(B, N, 1) * 0.05
+        g2 = torch.randn(B, N, 1) * 0.05
+        valid = torch.zeros(B, N, dtype=torch.bool)
+        valid[:, :4] = True
+        loss_fn = HyperIVLoss()
+        full = loss_fn(tv_pred[:, :4], tv_true[:, :4], k[:, :4],
+                       gt[:, :4], g1[:, :4], g2[:, :4])
+        masked = loss_fn(tv_pred, tv_true, k, gt, g1, g2, valid_mask=valid)
+        assert torch.allclose(full[0], masked[0], atol=1e-10)
