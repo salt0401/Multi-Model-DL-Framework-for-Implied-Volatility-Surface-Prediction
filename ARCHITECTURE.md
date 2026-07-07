@@ -520,6 +520,7 @@ test_train_integration.py  10 tests   End-to-end training loops
 | HyperIV | **Trained (2026-07-06)** | Test tv-RMSE 0.00215, MAPE 6.94%, butterfly viol. 0.055% | Independent model, PIVOT price aux |
 | ICNN Dupire | **V1-V3 complete** | 0% butterfly violations | ICNN local vol extractor |
 | Flow matching (replaced DDPM) | **Trained (2026-07-06)** | Test tv-RMSE 0.00171 vs RW 0.00192 (DM p<1e-4) | PCA factors + conditional OT-FM over daily increments |
+| **US Mag 7 branch (2026-07-07)** | **Trained & evaluated** | Flow beats RW 7/7 tickers (all DM p<0.05); pooled HyperIV MAPE 4.97%; strategy: gross ≈ 0, net < 0 after real spreads | `src/us_dataset.py`, `*_us.py`; see `docs/mag7_us_branch_report.md` |
 
 ### Known Issues
 
