@@ -178,12 +178,15 @@ class UsOptionsProcessor:
         """
         import torch
         surfaces = []
+        cols = ['tau', 'logm', 'total_var', 'y_atm']
+        if 'n_earnings' in df.columns:
+            cols.append('n_earnings')        # drives the M4 event head
         for (d, t), grp in df.sort_values(['date', 'ticker', 'tau', 'logm']) \
                              .groupby(['date', 'ticker'], sort=True):
             if len(grp) < 20:
                 continue
             tens = tuple(torch.from_numpy(grp[[c]].to_numpy(dtype='float64'))
-                         for c in ['tau', 'logm', 'total_var', 'y_atm'])
+                         for c in cols)
             surfaces.append((d, t, tens))
         return surfaces
 
@@ -224,7 +227,14 @@ class UsOptionsProcessor:
                                     method='nearest')
                     vals = np.where(np.isnan(vals), near, vals)
                 daily[d] = np.clip(vals.astype('float64'), 1e-8, None)
-                spot_by_date[d] = grp['close_yf'].iloc[0]
+                # Split-ADJUSTED close is the right series for return features.
+                # Symbols with no yfinance spot (SPY) fall back to the parity
+                # forward, which is safe for them because they have not split;
+                # using it for a name that HAS split would inject a spurious
+                # -75%-style return on the split date.
+                s = grp['close_yf'].iloc[0]
+                spot_by_date[d] = (s if np.isfinite(s)
+                                   else grp['spot_syn'].iloc[0])
             except Exception:
                 continue
 

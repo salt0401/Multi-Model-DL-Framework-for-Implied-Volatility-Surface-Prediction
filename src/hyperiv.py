@@ -170,7 +170,32 @@ class HyperIVModel(nn.Module):
         self.feat_mean.copy_(mean.to(self.feat_mean))
         self.feat_std.copy_(std.to(self.feat_std).clamp(min=1e-8))
 
-    def forward(self, ref_set, target_tau, target_logm, target_yATM, ref_mask=None):
+    def enable_event_head(self, n_tickers, sigma_j_init):
+        """Add an additive scheduled-event term for single-stock surfaces.
+
+        w(k, tau) = w_diff(k, tau) + n_events(tau) * sigma_j^2 * s(k)
+
+        n_events enters ONLY as a multiplicative gate on a separate additive
+        term — never as a raw scalar fed into the MLP, which would let the
+        network smear a deterministic quarterly step into a smooth function of
+        days-to-earnings. sigma_j is a per-ticker learned scalar initialized at
+        the measured implied earnings moves, and s(k) is a mild shape
+        multiplier initialized at 1.
+
+        Measured justification: an expiry spanning an announcement carries
+        +2.5 (AAPL) to +14.2 (TSLA) vol points, and earnings are 23-58% of
+        front-expiry total variance.
+        """
+        self.has_event_head = True
+        init = torch.as_tensor(sigma_j_init, dtype=torch.get_default_dtype())
+        self.log_sigma_j = nn.Parameter(torch.log(init.clamp(min=1e-4)))
+        self.event_shape = nn.Sequential(
+            nn.Linear(1, 16), nn.Tanh(), nn.Linear(16, 1))
+        nn.init.zeros_(self.event_shape[-1].weight)
+        nn.init.zeros_(self.event_shape[-1].bias)
+
+    def forward(self, ref_set, target_tau, target_logm, target_yATM, ref_mask=None,
+                n_events=None, ticker_idx=None):
         """
         Args:
             ref_set:     (batch, n_ref, 3) — reference options (tau, logm, total_var)
@@ -221,6 +246,15 @@ class HyperIVModel(nn.Module):
         # survive near-zero yATM days.
         yatm_tilde = torch.sqrt(target_yATM ** 2 + 0.002 ** 2)
         tv_pred = yatm_tilde * tv_pred_ratio
+
+        # Additive scheduled-event term (single names only; n_events is 0 for
+        # index symbols, which switches the term off exactly).
+        if getattr(self, 'has_event_head', False) and n_events is not None:
+            sig2 = torch.exp(2.0 * self.log_sigma_j)          # (n_tickers,)
+            s = sig2[ticker_idx].reshape(-1, 1, 1) if ticker_idx is not None \
+                else sig2.mean()
+            shape = 1.0 + self.event_shape(target_logm)
+            tv_pred = tv_pred + n_events * s * shape
 
         # 5. Compute analytical gradients via autograd
         total_output = tv_pred.sum()

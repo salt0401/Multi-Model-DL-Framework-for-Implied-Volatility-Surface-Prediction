@@ -50,8 +50,15 @@ def _sigmoid(x):
 def unpack(params, n_slices):
     """Unconstrained vector -> (theta, rho, psi).
 
-    BUTTERFLY is guaranteed by construction: psi = 4/(1+|rho|) * sigmoid(.)
-    enforces Gatheral-Jacquier's psi(1+|rho|) < 4 exactly, for every slice.
+    BUTTERFLY is guaranteed by construction, via BOTH Gatheral-Jacquier
+    sufficient conditions (Thm 4.2), not just the first:
+        (i)  theta*phi*(1+|rho|)  < 4   <=>  psi(1+|rho|) < 4
+        (ii) theta*phi^2*(1+|rho|) <= 4  <=>  psi <= 2*sqrt(theta/(1+|rho|))
+    An earlier version enforced only (i). Condition (ii) binds precisely when
+    theta is small and psi moderate — i.e. at short maturities, which is the
+    entire dataset — and its omission let the risk-neutral density g(k) go
+    NEGATIVE (measured min density -2.7 on SPY) while the gate still reported
+    "butterfly ok". psi is therefore capped by the MINIMUM of the two bounds.
 
     ATM CALENDAR is guaranteed by construction: theta is a cumulative sum of
     strictly positive increments, so theta is strictly increasing (the 1e-6
@@ -74,7 +81,9 @@ def unpack(params, n_slices):
     z = params[2 * n_slices:3 * n_slices]
     theta = np.cumsum(_softplus(v) + 1e-6)
     rho = np.tanh(u)
-    psi = 4.0 / (1.0 + np.abs(rho)) * np.clip(_sigmoid(z), 1e-6, 0.999)
+    one_p = 1.0 + np.abs(rho)
+    psi_max = np.minimum(4.0 / one_p, 2.0 * np.sqrt(theta / one_p))
+    psi = psi_max * np.clip(_sigmoid(z), 1e-6, 0.999)
     return theta, rho, psi
 
 
@@ -227,13 +236,39 @@ def arbitrage_report(fit, k_grid=None):
     if k_grid is None:
         k_grid = np.linspace(-0.6, 0.6, 121)
     theta, rho, psi = fit['theta'], fit['rho'], fit['psi']
-    lhs = psi * (1.0 + np.abs(rho))
+    one_p = 1.0 + np.abs(rho)
+    lhs1 = psi * one_p                       # GJ condition (i)
+    lhs2 = psi ** 2 * one_p / np.maximum(theta, 1e-12)   # GJ condition (ii)
+
+    # The parameter conditions are only SUFFICIENT proxies. What actually
+    # matters is the risk-neutral density itself, so measure it directly —
+    # an earlier version reported "butterfly ok" from condition (i) alone
+    # while the density was negative.
+    dens = np.stack([_density(k_grid, theta[i], rho[i], psi[i])
+                     for i in range(len(theta))])
     W = np.stack([essvi_w(k_grid, theta[i], rho[i], psi[i])
                   for i in range(len(theta))])
     cal_viol = float(np.mean(np.diff(W, axis=0) < 0)) if len(theta) > 1 else 0.0
-    return {'butterfly_lhs_max': float(np.max(lhs)),
-            'butterfly_ok': bool(np.all(lhs < 4.0)),
+    return {'butterfly_lhs_max': float(np.max(lhs1)),
+            'butterfly_lhs2_max': float(np.max(lhs2)),
+            'min_density': float(np.min(dens)),
+            'butterfly_ok': bool(np.min(dens) > 0),
             'theta_increasing': bool(np.all(np.diff(theta) > 0)),
             'calendar_violation_rate': cal_viol,
             'rho_min': float(np.min(rho)), 'rho_max': float(np.max(rho)),
             'wing_ratio': float(np.median((1 - rho) / (1 + rho)))}
+
+
+def _density(k, theta, rho, psi):
+    """Gatheral's g(k): the risk-neutral density factor / Dupire denominator."""
+    theta = max(float(theta), 1e-12)
+    phi = psi / theta
+    x = phi * np.asarray(k, dtype=float)
+    D = np.sqrt(np.maximum((x + rho) ** 2 + 1.0 - rho ** 2, 1e-16))
+    w = 0.5 * theta * (1.0 + rho * x + D)
+    dw = 0.5 * theta * phi * (rho + (x + rho) / D)
+    d2w = 0.5 * theta * phi ** 2 * (1.0 - rho ** 2) / D ** 3
+    w = np.maximum(w, 1e-12)
+    return (1.0 - (k / w) * dw
+            + 0.25 * (-0.25 - 1.0 / w + k ** 2 / w ** 2) * dw ** 2
+            + 0.5 * d2w)

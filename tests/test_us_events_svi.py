@@ -124,14 +124,33 @@ class TestGlobalESSVI:
         assert rep['butterfly_ok']
 
     def test_butterfly_holds_by_construction_for_random_params(self):
-        from svi_us import unpack
+        """Both Gatheral-Jacquier conditions AND the density itself.
+
+        Regression guard: an earlier parameterization enforced only
+        psi(1+|rho|) < 4, which is insufficient at small theta — the density
+        went to -2.7 on real SPY slices while this gate still passed.
+        """
+        from svi_us import unpack, _density
         rng = np.random.default_rng(1)
-        for _ in range(200):
+        k = np.linspace(-0.6, 0.6, 121)
+        for _ in range(300):
             p = rng.normal(0, 6, 9)          # deliberately extreme
             theta, rho, psi = unpack(p, 3)
-            assert np.all(psi * (1 + np.abs(rho)) < 4.0)
+            one_p = 1 + np.abs(rho)
+            assert np.all(psi * one_p < 4.0 + 1e-12)          # condition (i)
+            assert np.all(psi ** 2 * one_p / theta <= 4.0 + 1e-9)  # condition (ii)
             assert np.all(np.diff(theta) > 0)   # strict ATM calendar
             assert np.all(theta > 0)
+            for i in range(3):
+                assert np.min(_density(k, theta[i], rho[i], psi[i])) > 0
+
+    def test_density_positive_on_fitted_surfaces(self):
+        from svi_us import fit_snapshot, arbitrage_report
+        for seed in range(5):
+            fit = fit_snapshot(self._slices(noise=0.05, seed=seed))
+            rep = arbitrage_report(fit)
+            assert rep['min_density'] > 0
+            assert rep['butterfly_ok']
 
     def test_recovers_known_surface(self):
         from svi_us import fit_snapshot, iv_rmse
@@ -162,3 +181,77 @@ class TestGlobalESSVI:
         cv = cv_iv_rmse(slices)
         ins = iv_rmse(fit_snapshot(slices), slices)
         assert np.isfinite(cv) and cv >= ins * 0.5
+
+
+# ── M4 event head ─────────────────────────────────────────────────────
+
+class TestHyperIVEventHead:
+    def _model(self):
+        import torch
+        from hyperiv import HyperIVModel
+        torch.manual_seed(0)
+        m = HyperIVModel(embed_dim=16, n_heads=4, n_transformer_layers=1,
+                         target_hidden_dims=(8, 4))
+        m.enable_event_head(n_tickers=3,
+                            sigma_j_init=torch.tensor([0.05, 0.08, 0.09]))
+        # eval mode: the set encoder uses dropout, so two forward passes in
+        # train mode differ and none of these comparisons would be meaningful.
+        m.eval()
+        return m
+
+    def _inputs(self, B=2, N=5):
+        import torch
+        return (torch.rand(B, 8, 3) * 0.05, torch.rand(B, N, 1) * 0.2,
+                torch.randn(B, N, 1) * 0.15, torch.rand(B, N, 1) * 0.05)
+
+    def test_zero_events_leaves_surface_unchanged(self):
+        """Index symbols (n_events = 0) must be numerically untouched."""
+        import torch
+        m = self._model()
+        ref, tau, logm, yatm = self._inputs()
+        idx = torch.zeros(2, dtype=torch.long)
+        base, *_ = m(ref, tau, logm, yatm)
+        with_zero, *_ = m(ref, tau, logm, yatm,
+                          n_events=torch.zeros_like(tau), ticker_idx=idx)
+        assert torch.allclose(base, with_zero, atol=1e-12)
+
+    def test_event_raises_total_variance(self):
+        import torch
+        m = self._model()
+        ref, tau, logm, yatm = self._inputs()
+        idx = torch.zeros(2, dtype=torch.long)
+        base, *_ = m(ref, tau, logm, yatm,
+                     n_events=torch.zeros_like(tau), ticker_idx=idx)
+        one, *_ = m(ref, tau, logm, yatm,
+                    n_events=torch.ones_like(tau), ticker_idx=idx)
+        assert (one > base).all()
+
+    def test_event_term_scales_with_count_and_sigma(self):
+        import torch
+        m = self._model()
+        ref, tau, logm, yatm = self._inputs()
+        idx0 = torch.zeros(2, dtype=torch.long)
+        b, *_ = m(ref, tau, logm, yatm, n_events=torch.zeros_like(tau),
+                  ticker_idx=idx0)
+        one, *_ = m(ref, tau, logm, yatm, n_events=torch.ones_like(tau),
+                    ticker_idx=idx0)
+        two, *_ = m(ref, tau, logm, yatm,
+                    n_events=2 * torch.ones_like(tau), ticker_idx=idx0)
+        # additive and linear in the event count
+        assert torch.allclose(two - b, 2 * (one - b), atol=1e-10)
+        # a higher-sigma ticker gets a larger bump
+        idx2 = torch.full((2,), 2, dtype=torch.long)
+        big, *_ = m(ref, tau, logm, yatm, n_events=torch.ones_like(tau),
+                    ticker_idx=idx2)
+        assert (big - b).mean() > (one - b).mean()
+
+    def test_event_head_is_trainable(self):
+        import torch
+        m = self._model()
+        ref, tau, logm, yatm = self._inputs()
+        idx = torch.zeros(2, dtype=torch.long)
+        out, *_ = m(ref, tau, logm, yatm, n_events=torch.ones_like(tau),
+                    ticker_idx=idx)
+        out.sum().backward()
+        assert m.log_sigma_j.grad is not None
+        assert torch.isfinite(m.log_sigma_j.grad).all()

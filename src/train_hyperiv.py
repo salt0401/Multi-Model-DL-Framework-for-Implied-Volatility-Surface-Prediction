@@ -57,7 +57,10 @@ def collate_surfaces(batch, n_reference, device, generator=None):
     target_tvs = []
     target_sizes = []
 
-    for tau, logm, tv, yatm in batch:
+    extras = []                       # optional 5th channel (e.g. n_earnings)
+    for surface in batch:
+        tau, logm, tv, yatm = surface[:4]
+        extra = surface[4] if len(surface) > 4 else None
         n = tau.shape[0]
         if n <= n_reference:
             # Too few options — use all as reference, duplicate some as target
@@ -75,6 +78,7 @@ def collate_surfaces(batch, n_reference, device, generator=None):
         target_yATMs.append(yatm[target_idx])
         target_tvs.append(tv[target_idx])
         target_sizes.append(len(target_idx))
+        extras.append(extra[target_idx] if extra is not None else None)
 
     # Pad reference sets
     max_ref = max(r.shape[0] for r in ref_sets)
@@ -119,7 +123,7 @@ def collate_surfaces(batch, n_reference, device, generator=None):
             padded_tvs.append(t_tv)
             target_masks.append(torch.zeros(target_sizes[i], dtype=torch.bool))
 
-    return (
+    out = [
         torch.stack(padded_refs).to(device),
         torch.stack(ref_masks).to(device),
         torch.stack(padded_taus).to(device),
@@ -127,7 +131,17 @@ def collate_surfaces(batch, n_reference, device, generator=None):
         torch.stack(padded_yATMs).to(device),
         torch.stack(padded_tvs).to(device),
         torch.stack(target_masks).to(device),
-    )
+    ]
+    if any(e is not None for e in extras):
+        padded_extra = []
+        for i, e in enumerate(extras):
+            pad_len = max_target - target_sizes[i]
+            e = e if e is not None else torch.zeros(target_sizes[i], 1)
+            padded_extra.append(torch.cat([e, torch.zeros(pad_len, 1,
+                                                          dtype=e.dtype)])
+                                if pad_len > 0 else e)
+        out.append(torch.stack(padded_extra).to(device))
+    return tuple(out)
 
 
 def train_one_epoch(model, surfaces, loss_fn, optimizer, n_reference, batch_size, device, gradient_clip=1.0):
@@ -143,12 +157,12 @@ def train_one_epoch(model, surfaces, loss_fn, optimizer, n_reference, batch_size
         batch_idx = indices[start:start + batch_size]
         batch = [surfaces[i] for i in batch_idx]
 
-        ref_set, ref_mask, t_tau, t_logm, t_yATM, t_tv, t_mask = collate_surfaces(
-            batch, n_reference, device
-        )
+        packed = collate_surfaces(batch, n_reference, device)
+        ref_set, ref_mask, t_tau, t_logm, t_yATM, t_tv, t_mask = packed[:7]
+        n_ev = packed[7] if len(packed) > 7 else None
 
         tv_pred, grad_tau, grad_logm, grad_logm2 = model(
-            ref_set, t_tau, t_logm, t_yATM, ref_mask=ref_mask
+            ref_set, t_tau, t_logm, t_yATM, ref_mask=ref_mask, n_events=n_ev
         )
 
         loss_total, mse, cal, but, price = loss_fn(
@@ -182,12 +196,13 @@ def evaluate(model, surfaces, loss_fn, n_reference, batch_size, device, seed=900
 
     for start in range(0, len(surfaces), batch_size):
         batch = surfaces[start:start + batch_size]
-        ref_set, ref_mask, t_tau, t_logm, t_yATM, t_tv, t_mask = collate_surfaces(
-            batch, n_reference, device, generator=generator
-        )
+        packed = collate_surfaces(batch, n_reference, device,
+                                  generator=generator)
+        ref_set, ref_mask, t_tau, t_logm, t_yATM, t_tv, t_mask = packed[:7]
+        n_ev = packed[7] if len(packed) > 7 else None
 
         tv_pred, grad_tau, grad_logm, grad_logm2 = model(
-            ref_set, t_tau, t_logm, t_yATM, ref_mask=ref_mask
+            ref_set, t_tau, t_logm, t_yATM, ref_mask=ref_mask, n_events=n_ev
         )
 
         loss_total, _, _, _, _ = loss_fn(
@@ -228,7 +243,8 @@ def compute_violation_rates(model, surfaces, n_reference, device,
     but_viol = 0
     total = 0
 
-    for tau, logm, tv, yatm in surfaces:
+    for surface in surfaces:
+        tau, logm, tv, yatm = surface[:4]
         n = tau.shape[0]
         perm = torch.randperm(n, generator=generator)
         ref_idx = perm[:min(n_reference, n)]
@@ -269,9 +285,10 @@ def save_fit_plot(model, surfaces, n_reference, device, path, seed=9200):
     model.eval()
     generator = torch.Generator().manual_seed(seed)
     batch = surfaces[:64]
-    ref_set, ref_mask, t_tau, t_logm, t_yATM, t_tv, t_mask = collate_surfaces(
-        batch, n_reference, device, generator=generator)
-    tv_pred, _, _, _ = model(ref_set, t_tau, t_logm, t_yATM, ref_mask=ref_mask)
+    packed = collate_surfaces(batch, n_reference, device, generator=generator)
+    ref_set, ref_mask, t_tau, t_logm, t_yATM, t_tv, t_mask = packed[:7]
+    tv_pred, _, _, _ = model(ref_set, t_tau, t_logm, t_yATM, ref_mask=ref_mask,
+                             n_events=packed[7] if len(packed) > 7 else None)
     valid = ~t_mask
     p = tv_pred.detach()[valid].cpu().numpy()
     t = t_tv.detach()[valid].cpu().numpy()
@@ -285,7 +302,7 @@ def save_fit_plot(model, surfaces, n_reference, device, path, seed=9200):
     axes[0].set_title('HyperIV test fit')
 
     # One day's smile: shortest-tau slice of the first surface
-    tau0, logm0, tv0, yatm0 = batch[0]
+    tau0, logm0, tv0, yatm0 = batch[0][:4]
     t_min = tau0.min()
     m = (tau0 == t_min).flatten()
     ref0 = torch.cat([tau0[:n_reference], logm0[:n_reference], tv0[:n_reference]],

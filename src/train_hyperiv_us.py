@@ -9,7 +9,10 @@ train_hyperiv.py unchanged.
 from hyperiv import HyperIVModel, HyperIVLoss
 from train_hyperiv import (collate_surfaces, train_one_epoch, evaluate,
                            compute_violation_rates, load_checkpoint_state)
+import numpy as np
+
 from us_dataset import UsOptionsProcessor, MAG7
+from us_events import EarningsCalendar, add_event_columns, decompose_variance
 from utils import (load_config, parse_date, set_seed, setup_logging,
                    MetricsTracker, EarlyStopping)
 
@@ -53,9 +56,17 @@ def main():
     logger.info('Building US option table...')
     proc = UsOptionsProcessor(config['data_us']['data_dir'])
     table = proc.build()
+    cal = EarningsCalendar.from_data_dir(config['data_us']['data_dir'])
+    table = add_event_columns(table, cal)
     logger.info(f'{len(table)} option rows, '
                 f'{table.groupby("ticker").size().to_dict()}')
     pooled = proc.prepare_hyperiv_surfaces(table)
+
+    # Per-ticker implied earnings moves, for the event-head initialization
+    dec = decompose_variance(table)
+    sigma_j = {t: float(np.sqrt(max(g['jump_var'].median(), 1e-6)))
+               for t, g in dec.groupby('ticker')}
+    logger.info(f'sigma_j init: { {k: round(v, 4) for k, v in sigma_j.items()} }')
 
     train_surfaces, test_by_ticker = [], {t: [] for t in MAG7}
     for d, t, tens in pooled:
@@ -72,8 +83,8 @@ def main():
     logger.info(f'Surfaces - train: {len(train_surfaces)}, '
                 f'val: {len(val_surfaces)}, test: {n_test}')
 
-    all_feats = torch.cat([torch.cat([a, b, c], dim=-1)
-                           for a, b, c, _ in train_surfaces], dim=0)
+    all_feats = torch.cat([torch.cat(list(sf[:3]), dim=-1)
+                           for sf in train_surfaces], dim=0)
     feat_mean, feat_std = all_feats.mean(dim=0), all_feats.std(dim=0)
 
     model = HyperIVModel(
@@ -84,10 +95,24 @@ def main():
                                  cfg['target_hidden_dims'].split(',')),
     ).to(dtype).to(device)
     model.set_normalization(feat_mean, feat_std)
+    # Event head: n_events gates an additive term, so index-like surfaces
+    # (n_events = 0) are numerically untouched. Surfaces are pooled across
+    # tickers without a ticker index here, so a single shared sigma_j is
+    # learned, initialized at the cross-sectional median implied move.
+    model.enable_event_head(n_tickers=1,
+                            sigma_j_init=torch.tensor(
+                                [float(np.median(list(sigma_j.values())))]))
+    model.to(dtype).to(device)
 
     w_mse = cfg.getfloat('w_mse', fallback=1.0)
-    w_cal = cfg.getfloat('w_calendar', fallback=1.0)
-    w_but = cfg.getfloat('w_butterfly', fallback=10.0)
+    # STRUCTURALLY UNREACHABLE, not merely weighted 0: relu(-dw/dtau) is in
+    # yr^-1 at scale 0.10-0.42 while the fit MSE is in w^2 at ~5e-6, so the
+    # two are not commensurable at ANY weight, and w -> 0 zeroes the penalty
+    # while also zeroing the surface. Calendar monotonicity is instead a
+    # property of the parameterization (see svi_us.py) and is measured, not
+    # penalized. This is deliberately not read from config.
+    w_cal = 0.0
+    w_but = 0.0
     w_price = cfg.getfloat('w_price', fallback=0.1)
     warmup = cfg.getint('penalty_warmup_epochs', fallback=15)
     ramp = cfg.getint('penalty_ramp_epochs', fallback=25)

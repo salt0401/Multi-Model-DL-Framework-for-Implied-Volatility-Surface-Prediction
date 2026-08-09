@@ -142,7 +142,7 @@ def main():
     torch.set_default_dtype(dtype)
 
     proc = UsOptionsProcessor(config['data_us']['data_dir'])
-    table = proc.build()
+    table = proc.build(tickers=args.tickers.split(','))
     logger.info(f'US option table: {len(table)} rows')
 
     summary = []

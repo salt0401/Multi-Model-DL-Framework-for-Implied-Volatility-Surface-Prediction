@@ -43,6 +43,28 @@ plus `docs/us_pipeline_report.md` written and `git push` clean.
 7. **T7 M4 event head** + structural monotonicity.
 8. **T8 M2 analytic Greeks** from SVI (last; nothing consumes it until M3's role is settled).
 
+---
+
+# Phase 2 — Deferred items + SPY strategy (2026-08-09)
+
+**Completion check:**
+```bash
+cd src
+python train_flow_us_pooled.py --seeds 10        # pooled + ensemble, incl. SPY
+python evaluate_us_pooled.py                     # GATE: pooled must beat per-ticker on >=5/7 by DM
+python strategy_spy.py --cost-fraction 1.0       # SPY economics + cost-neutral bar + sensitivity
+python train_hyperiv_us.py --on_gpu              # M4 with event head
+python greeks_us.py --report                     # M2 replacement: analytic SVI Greeks + event jump
+python -m pytest ../tests -q                     # all green
+```
+
+**P2 tasks**
+1. **M5 pooled + seed ensemble + event clock.** Per-ticker log-mean before SVD (else PC1 encodes the TSLA-vs-MSFT level gap, not dynamics); shared basis; per-ticker z-scored scores. Conditioning blocks: own state, market (SPY scores + VIX + dispersion), zero-parameter cross-section (mean z, deviation), earnings (n_events, days-to-earnings), gap-days. Tiny ticker embedding (8-dim + dropout) so training starts at full pooling. 10-seed velocity ensemble. **Gate:** pooled must beat the existing per-ticker models on ≥5/7 by DM and on pooled CRPS, else keep per-ticker and report that.
+2. **Block bootstrap over dates** replacing the invalid "7/7 independent tests" framing.
+3. **SPY strategy + cost-neutral bar as headline.** `BE_acc = 0.5 + (straddle_spread/vega)/(2·E|ΔIV|)`. Default cost = **full quoted spread** (was half). Report a sensitivity curve over cost fraction 0.5→1.0 and over achieved accuracy, not a point Sharpe.
+4. **M4 event head.** `w = w_diff + n_events·σ_j²·s(k)`; σ_j per-ticker learned scalar initialized at measured medians; `n_events` as a multiplicative gate, never a raw scalar input. Make `w_calendar` structurally unreachable, not merely weight 0.
+5. **M2 replacement.** Closed-form Dupire local variance on the de-evented SVI surface + explicit discrete event jump; analytic vanna/volga/∂σ_LV/∂K from SVI parameters.
+
 ## Not doing
 - No new option-data vendor (3–4 expiries is the ceiling of the free source; documented as the binding limitation).
 - No calendar spreads / dispersion / pre-earnings long-vol strategies (research: negative net at this universe and resolution; sub-10-day front leg doesn't exist in the data).
