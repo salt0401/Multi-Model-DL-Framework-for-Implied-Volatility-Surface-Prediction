@@ -26,7 +26,7 @@ import pandas as pd
 API = 'https://www.dolthub.com/api/v1alpha1/post-no-preference/options/master'
 OUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'dataset', 'us_options')
 MANIFEST = os.path.join(OUT_DIR, 'manifest.json')
-TICKERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'FB']
+TICKERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'FB', 'SPY']
 START = dt.date(2019, 1, 1)
 PAGE_CAP = 200          # defensive pagination threshold
 MAX_WORKERS = 3

@@ -101,14 +101,20 @@ class UsOptionsProcessor:
         merged = []
         for t, grp in chains.groupby('ticker'):
             sp = spots[spots['ticker'] == t][['date', 'close_unadj']]
+            grp = grp.sort_values('date')
             if sp.empty:
+                # No yfinance series for this symbol (e.g. SPY was not in the
+                # spot fetch). The spot is only used for return features —
+                # moneyness comes from the parity forward — so carry NaN
+                # rather than silently dropping the whole symbol.
+                grp = grp.assign(close_unadj=np.nan)
+                merged.append(grp)
                 continue
-            g = pd.merge_asof(grp.sort_values('date'), sp.sort_values('date'),
-                              on='date', direction='backward')
-            merged.append(g)
+            merged.append(pd.merge_asof(grp, sp.sort_values('date'),
+                                        on='date', direction='backward'))
         df = pd.concat(merged, ignore_index=True)
         df = df.rename(columns={'close_unadj': 'close_yf'})
-        df = df.dropna(subset=['close_yf', 'vol', 'bid', 'ask'])
+        df = df.dropna(subset=['vol', 'bid', 'ask'])
 
         df['mid'] = (df['bid'] + df['ask']) / 2
         df['spread'] = df['ask'] - df['bid']

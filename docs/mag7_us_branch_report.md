@@ -42,6 +42,8 @@
 | META | 0.002751 | 0.003111 | −11.6% | −7.46 | <1e-4 | 0.64 |
 | TSLA | 0.004833 | 0.005067 | −4.6% | −2.42 | 0.016 | 0.87 |
 
+**Statistical caveat added 2026-08-09 — "7/7 significant" is not 7 replications.** The first principal component explains ~77% of cross-sectional variation in single-name IV level and skew (Christoffersen–Fournier–Jacobs, RFS 2018) and ~87% of firm-level 30-day implied variance (Baruník et al. 2023). With that much common variance the *effective* number of independent tests here is 1–2, not 7, and the seven DM statistics are strongly dependent. The honest reading is "the result holds on a correlated basket of seven mega-caps," not "it replicated seven times." Block-bootstrapping over dates is the right inference procedure and is pending.
+
 Directional accuracy of the 30d ATM IV forecast (sign of change): 48.4%–59.4%, pooled 53.6% — the RMSE gains come mostly from denoising/shrinkage of the surface dynamics rather than strong directional calls. Coverage remains under-dispersed on some names (AMZN 0.48) — same caveat as TXO: treat intervals as indicative. Full metrics incl. CRPS and violation rates: `logs/flow_us_eval.json`; figure `logs/flow_us_vs_rw.png`.
 
 ### 3.2 Pooled HyperIV (cross-ticker)
@@ -61,7 +63,13 @@ One model, seven underlyings, 4,803 pooled training surfaces (300 epochs, ~3 h o
 
 The pooled cross-ticker model matches the TXO single-market HyperIV's accuracy (TXO: tv-RMSE 0.00215, MAPE 6.94%) while covering seven surfaces at once — the hypernetwork amortizes across assets exactly as the paper's transfer experiments suggested. Violation rates are nonzero by construction (fit-only training, see below); the highest rates (AAPL/MSFT) coincide with the tightest smiles, where quoted-mid structure sits closest to the static bounds.
 
-**A finding in its own right — arbitrage penalties are a data-regime property, not a universal good:** on TXO (index, τ to 2y), calendar/butterfly penalties at weight 10 train fine after the stability fixes. On US short-dated single names they are *toxic*: measured raw penalty mass on a faithfully-fitted surface (~1e-2) sits three orders of magnitude above the fitted MSE (~5e-6), because quoted mid surfaces around **earnings events** genuinely brush or cross the static bounds. At any meaningful weight, the global optimum is the degenerate w→0 surface (which zeroes both penalties), and the softplus head locks it in. Diagnosed by instrumented component-loss probes; the US model therefore trains fit-only + price auxiliary, with violations *measured* at evaluation instead of enforced in training.
+**Arbitrage penalties are unusable here — but NOT for the reason first recorded (corrected 2026-08-09).** The original text in this section claimed the penalties were toxic "because quoted mid surfaces around earnings events genuinely brush or cross the static bounds." **That claim is false and has been retracted.** Direct measurement of negative forward variance (the exact calendar-arbitrage test) over 56,821 adjacent-expiry × fixed-log-moneyness cells finds violations in only 1.07% of cells, **0.00% at the money**, and they are *less* frequent across an earnings gap (0.51%) than across a non-earnings gap (1.20%) — because an earnings step *adds* σ_j² to the longer expiry, which makes calendar monotonicity **easier**, not harder. ATM total variance is calendar-monotone in 100.00% of single-name adjacent-expiry pairs, and the Gatheral–Jacquier butterfly bound has measured slack of 30–45×.
+
+The real causes are two, and both are model-side:
+1. **Units incommensurability.** `calendar_loss = mean(relu(-∂w/∂τ))` is in yr⁻¹ with a natural scale of 0.10–0.42, while the fit MSE is in w² at ~5e-6. No weight makes these commensurable, and **w→0 zeroes both penalties**, so the degenerate optimum is structural rather than earnings-specific.
+2. **Model-side ringing.** Forward variance genuinely steps by 1.37× (TSLA) to 2.21× (META) across an earnings gap; a smooth network τ-derivative forced to reproduce that step overshoots and manufactures negative ∂w/∂τ *in the fit*, not in the data.
+
+The correct fix is therefore a **hard-constrained parameterization** (arbitrage-free by construction) plus an explicit event term — not penalty tuning and not an earnings-aware penalty. This is what motivates the M1 replacement in the full US pivot (`docs/superpowers/plans/2026-08-09-us-full-pivot.md`).
 
 ## 4. TXO comparison — "does a deeper market model better?"
 
